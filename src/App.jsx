@@ -8,6 +8,13 @@ import {
   fetchSkillFile,
   deleteSkills,
 } from "./api.js";
+import Logo from "./Logo.jsx";
+import {
+  THEMES,
+  applyTheme,
+  readStoredTheme,
+  writeStoredTheme,
+} from "./themes.js";
 
 function formatBytes(n) {
   if (!n) return "0 B";
@@ -63,6 +70,29 @@ function kindStamp(kind) {
   if (kind === "builtin") return "builtin";
   if (kind === "plugin") return "plugin cache";
   return "user";
+}
+
+function ThemeSelect() {
+  const [theme, setTheme] = useState(() => applyTheme(readStoredTheme()));
+
+  function onChange(event) {
+    const next = applyTheme(event.target.value);
+    writeStoredTheme(next);
+    setTheme(next);
+  }
+
+  return (
+    <label className="theme-select">
+      <span>Theme</span>
+      <select value={theme} onChange={onChange} aria-label="Color theme">
+        {THEMES.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 export default function App() {
@@ -265,27 +295,35 @@ export default function App() {
     <div className="desk">
       <header className="masthead">
         <div className="wordmark">
-          <p className="edition">Local filesystem · user cabinet</p>
-          <h1>Skill Cabinet</h1>
+          <Logo className="mark" />
+          <div className="wordmark-text">
+            <p className="edition">Local filesystem · user cabinet</p>
+            <h1>Skill Cabinet</h1>
+          </div>
         </div>
-        <label className="finder">
-          <span>Find</span>
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="name, description, path, frontmatter"
-            type="search"
-            spellCheck="false"
-          />
-        </label>
-        <div className="census">
-          <b>{loading ? "…" : catalog?.total ?? 0}</b>
-          <span>cards in house</span>
-          <button type="button" className="textish" onClick={() => load(true)}>
-            Reshelve
-          </button>
+        <div className="finder">
+          <label>
+            <span>Find</span>
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="name, description, path, frontmatter"
+              type="search"
+              spellCheck="false"
+            />
+          </label>
           <p className="keys">j k move · / find · x mark · d delete</p>
+        </div>
+        <div className="mast-tools">
+          <p className="census">
+            <b>{loading ? "…" : catalog?.total ?? 0}</b>
+            <span>in house</span>
+            <button type="button" className="textish" onClick={() => load(true)}>
+              Reshelve
+            </button>
+          </p>
+          <ThemeSelect />
         </div>
       </header>
 
@@ -344,7 +382,7 @@ export default function App() {
             </label>
             <button
               type="button"
-              className="delete-btn"
+              className="stamp"
               disabled={!checked.size && !selectedId}
               onClick={() =>
                 openSlip(checked.size ? [...checked] : selectedId ? [selectedId] : [])
@@ -507,14 +545,19 @@ function SkillLeaf({
   return (
     <article className="leaf">
       <header className="leaf-head">
-        <p className="call">{callNumber(selected)}</p>
-        <h2>{selected.name}</h2>
-        <p className="path">{selected.path}</p>
-        <p className="stamps">
-          <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
-          {detail ? <span>{formatBytes(detail.bytes)}</span> : null}
-          <span>{formatWhen(selected.mtime)}</span>
-        </p>
+        <div className="leaf-ident">
+          <p className="call">{callNumber(selected)}</p>
+          <h2>{selected.name}</h2>
+          <p className="path">{selected.path}</p>
+          <p className="stamps">
+            <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
+            {detail ? <span>{formatBytes(detail.bytes)}</span> : null}
+            <span>{formatWhen(selected.mtime)}</span>
+          </p>
+        </div>
+        <button type="button" className="stamp" onClick={onDelete}>
+          Delete this skill
+        </button>
         <div className="leaf-tools">
           <div className="toggle">
             <button
@@ -538,9 +581,6 @@ function SkillLeaf({
               Source
             </button>
           </div>
-          <button type="button" className="delete-btn" onClick={onDelete}>
-            Delete this skill
-          </button>
         </div>
       </header>
 

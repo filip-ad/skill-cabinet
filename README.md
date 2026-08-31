@@ -1,5 +1,7 @@
 # Skill Cabinet
 
+<img src="public/logo.svg" alt="Skill Cabinet logo" width="64" height="64">
+
 A local catalog for agent skills installed on this machine. It scans user-level drawers such as `.agents`, `.claude`, `.codex`, `.cursor` (including plugins), and other `~/.* /skills` folders, lets you read each skill and its frontmatter, and can delete skill folders from disk.
 
 ## Run
@@ -30,12 +32,15 @@ Requires Node 20+.
 - Filter by drawer and search name, description, path, or frontmatter
 - Read the skill body (rendered or source), YAML frontmatter, and extra files in the folder
 - Delete one skill or several at once
+- Switch skins from the Theme menu (Carbon is the default)
 
 **Delete** removes the skill directory from disk. There is no undo. Builtin Cursor skills and plugin-cache copies may come back the next time that tool updates.
 
 Keys: `j`/`k` move, `/` find, `x` mark, `d` delete.
 
 ## Develop
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```bash
 git clone git@github.com:subsy/skill-cabinet.git
@@ -53,4 +58,4 @@ npm start
 
 ## License
 
-MIT
+[MIT](LICENSE)
