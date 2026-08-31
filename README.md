@@ -11,6 +11,11 @@ npx skill-cabinet
 That starts a local server on `127.0.0.1` (port `3781` by default) and opens it in your browser. Bind only happens on localhost.
 
 ```bash
+# from this repo instead of the npm package
+npx github:subsy/skill-cabinet
+```
+
+```bash
 # keep the current tab
 SKILL_CABINET_NO_OPEN=1 npx skill-cabinet
 
