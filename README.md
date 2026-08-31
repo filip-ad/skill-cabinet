@@ -2,7 +2,7 @@
 
 <img src="public/logo.svg" alt="Skill Cabinet logo" width="64" height="64">
 
-A local catalog for agent skills installed on this machine. It scans user-level drawers such as `.agents`, `.claude`, `.codex`, `.cursor` (including plugins), and other `~/.* /skills` folders, lets you read each skill and its frontmatter, and can delete skill folders from disk.
+A local catalog for agent skills installed on your machine. It scans user-level drawers such as `.agents`, `.claude`, `.codex`, `.cursor` (including plugins), and other `~/.* /skills` folders, lets you read each skill and its frontmatter, and can delete skill folders from disk.
 
 ## Run
 
