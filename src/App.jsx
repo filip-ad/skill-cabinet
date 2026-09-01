@@ -10,9 +10,13 @@ import {
 } from "./api.js";
 import Logo from "./Logo.jsx";
 import {
+  LINK_FILTERS,
   THEMES,
   applyTheme,
+  matchesLinkFilter,
+  readStoredLinkFilter,
   readStoredTheme,
+  writeStoredLinkFilter,
   writeStoredTheme,
 } from "./themes.js";
 
@@ -50,6 +54,9 @@ function matchesQuery(skill, q) {
     skill.description,
     skill.path,
     skill.scopeLabel,
+    skill.file ? "file" : "",
+    skill.link ? "symlink link" : "",
+    skill.linkTarget || "",
     JSON.stringify(skill.frontmatter || {}),
   ]
     .join("\n")
@@ -70,6 +77,25 @@ function kindStamp(kind) {
   if (kind === "builtin") return "builtin";
   if (kind === "plugin") return "plugin cache";
   return "user";
+}
+
+function formStamps(skill) {
+  const marks = [];
+  if (skill.link) {
+    marks.push(
+      <span key="link" data-form="link">
+        symlink
+      </span>,
+    );
+  }
+  if (skill.file) {
+    marks.push(
+      <span key="file" data-form="file">
+        file
+      </span>,
+    );
+  }
+  return marks;
 }
 
 function ThemeSelect() {
@@ -95,6 +121,25 @@ function ThemeSelect() {
   );
 }
 
+function LinkFilterSelect({ value, onChange }) {
+  return (
+    <label className="theme-select link-filter">
+      <span>Symlinks</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label="Symlink filter"
+      >
+        {LINK_FILTERS.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export default function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
@@ -110,6 +155,7 @@ export default function App() {
   const [view, setView] = useState("manuscript");
   const [slip, setSlip] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [linkFilter, setLinkFilter] = useState(readStoredLinkFilter);
   const searchRef = useRef(null);
   const listRef = useRef(null);
 
@@ -132,14 +178,26 @@ export default function App() {
 
   const skills = catalog?.skills ?? [];
   const scopes = catalog?.scopes ?? [];
+  const linked = useMemo(
+    () => skills.filter((s) => matchesLinkFilter(s, linkFilter)),
+    [skills, linkFilter],
+  );
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return skills.filter((s) => {
+    return linked.filter((s) => {
       if (scopeId !== "all" && s.scopeId !== scopeId) return false;
       return matchesQuery(s, q);
     });
-  }, [skills, scopeId, query]);
+  }, [linked, scopeId, query]);
+
+  const scopeCounts = useMemo(() => {
+    const by = new Map();
+    for (const skill of linked) {
+      by.set(skill.scopeId, (by.get(skill.scopeId) || 0) + 1);
+    }
+    return by;
+  }, [linked]);
 
   useEffect(() => {
     if (!visible.length) {
@@ -277,7 +335,9 @@ export default function App() {
 
   async function openFile(relPath) {
     if (!selectedId) return;
-    if (relPath === "SKILL.md") {
+    const card = skills.find((s) => s.id === selectedId);
+    const home = card?.skillRel || "SKILL.md";
+    if (relPath === home || relPath === "SKILL.md") {
       setPreview(null);
       return;
     }
@@ -346,7 +406,7 @@ export default function App() {
           >
             <i />
             <span>All drawers</span>
-            <em>{catalog?.total ?? 0}</em>
+            <em>{linked.length}</em>
           </button>
           {scopes.map((scope) => (
             <button
@@ -360,7 +420,7 @@ export default function App() {
             >
               <i data-kind={scope.kind} />
               <span>{scope.label}</span>
-              <em>{scope.count}</em>
+              <em>{scopeCounts.get(scope.id) ?? 0}</em>
             </button>
           ))}
         </nav>
@@ -380,6 +440,13 @@ export default function App() {
                 {checked.size ? ` · ${checked.size} marked` : ""}
               </span>
             </label>
+            <LinkFilterSelect
+              value={linkFilter}
+              onChange={(next) => {
+                writeStoredLinkFilter(next);
+                setLinkFilter(next);
+              }}
+            />
             <button
               type="button"
               className="stamp"
@@ -421,6 +488,7 @@ export default function App() {
                   </p>
                   <p className="meta">
                     <span data-kind={skill.kind}>{kindStamp(skill.kind)}</span>
+                    {formStamps(skill)}
                     <time>{formatWhen(skill.mtime)}</time>
                   </p>
                 </article>
@@ -487,8 +555,7 @@ function DeleteConfirm({ slip, busy, onCancel, onConfirm }) {
         {slip.cards.length === 1 ? "" : "s"} from disk
       </h2>
       <p className="warning">
-        This deletes the skill folder from the local filesystem. There is no
-        undo.
+        This deletes the skill from the local filesystem. There is no undo.
       </p>
       {builtin.length > 0 && (
         <p className="warning">
@@ -534,6 +601,8 @@ function SkillLeaf({
   const fm = detail?.frontmatter || selected.frontmatter || {};
   const keys = Object.keys(fm);
   const files = detail?.files || [];
+  const skillRel = selected.skillRel || "SKILL.md";
+  const showDisk = selected.file || selected.link;
   const body = preview
     ? preview.binary
       ? `Binary file · ${formatBytes(preview.size)}`
@@ -551,6 +620,7 @@ function SkillLeaf({
           <p className="path">{selected.path}</p>
           <p className="stamps">
             <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
+            {formStamps(selected)}
             {detail ? <span>{formatBytes(detail.bytes)}</span> : null}
             <span>{formatWhen(selected.mtime)}</span>
           </p>
@@ -565,7 +635,7 @@ function SkillLeaf({
               className={!preview && view === "manuscript" ? "on" : ""}
               onClick={() => {
                 setView("manuscript");
-                onOpenFile("SKILL.md");
+                onOpenFile(skillRel);
               }}
             >
               Manuscript
@@ -574,7 +644,7 @@ function SkillLeaf({
               type="button"
               className={!preview && view === "source" ? "on" : ""}
               onClick={() => {
-                onOpenFile("SKILL.md");
+                onOpenFile(skillRel);
                 setView("source");
               }}
             >
@@ -583,6 +653,24 @@ function SkillLeaf({
           </div>
         </div>
       </header>
+
+      {showDisk && (
+        <section className="catalogue">
+          <h3>On disk</h3>
+          <dl>
+            <div>
+              <dt>form</dt>
+              <dd>{selected.file ? "file" : "folder"}</dd>
+            </div>
+            {selected.link ? (
+              <div>
+                <dt>symlink</dt>
+                <dd>{selected.linkTarget || "yes"}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </section>
+      )}
 
       {keys.length > 0 && (
         <section className="catalogue">
@@ -608,7 +696,7 @@ function SkillLeaf({
                   type="button"
                   className={
                     (preview && preview.path === file.path) ||
-                    (!preview && file.path === "SKILL.md")
+                    (!preview && file.path === skillRel)
                       ? "on"
                       : ""
                   }

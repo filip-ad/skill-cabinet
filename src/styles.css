@@ -216,6 +216,10 @@ h3 {
   outline-offset: 2px;
 }
 
+.link-filter select {
+  min-width: 5.5rem;
+}
+
 .finder {
   display: grid;
   gap: var(--space-2xs);
@@ -390,6 +394,7 @@ h3 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.75rem;
   padding: 0.85rem 1rem 0.7rem;
   border-bottom: 1px solid var(--ink);
@@ -495,6 +500,11 @@ h3 {
 .meta [data-kind="builtin"],
 .stamps [data-kind="builtin"] {
   color: var(--kind-builtin);
+}
+
+.meta [data-form],
+.stamps [data-form] {
+  color: var(--brass);
 }
 
 .tick {

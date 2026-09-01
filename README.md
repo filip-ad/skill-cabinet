@@ -30,11 +30,13 @@ Requires Node 20+.
 ## What it can do
 
 - Filter by drawer and search name, description, path, or frontmatter
-- Read the skill body (rendered or source), YAML frontmatter, and extra files in the folder
+- Filter symlink cards: all, only, or hide
+- Read the skill body (rendered or source), YAML frontmatter, and extra files
+- See whether a skill is a folder, a file, or a symlink
 - Delete one skill or several at once
 - Switch skins from the Theme menu (Carbon is the default)
 
-**Delete** removes the skill directory from disk. There is no undo. Builtin Cursor skills and plugin-cache copies may come back the next time that tool updates.
+**Delete** removes the skill from disk (folder, file, or link). There is no undo. Builtin Cursor skills and plugin-cache copies may come back the next time that tool updates.
 
 Keys: `j`/`k` move, `/` find, `x` mark, `d` delete.
 

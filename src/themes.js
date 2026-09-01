@@ -37,3 +37,36 @@ export function applyTheme(id) {
   document.documentElement.dataset.theme = next;
   return next;
 }
+
+export const LINK_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "only", label: "Only" },
+  { id: "hide", label: "Hide" },
+];
+
+const LINK_KEY = "skill-cabinet-links";
+const LINK_IDS = new Set(LINK_FILTERS.map((t) => t.id));
+
+export function readStoredLinkFilter() {
+  try {
+    const value = localStorage.getItem(LINK_KEY);
+    if (value && LINK_IDS.has(value)) return value;
+  } catch {
+    /* private mode */
+  }
+  return "all";
+}
+
+export function writeStoredLinkFilter(id) {
+  try {
+    localStorage.setItem(LINK_KEY, id);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function matchesLinkFilter(skill, filter) {
+  if (filter === "only") return Boolean(skill.link);
+  if (filter === "hide") return !skill.link;
+  return true;
+}

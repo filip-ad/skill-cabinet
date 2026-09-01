@@ -62,12 +62,57 @@ function idFor(absPath) {
   return crypto.createHash("sha1").update(absPath).digest("hex").slice(0, 16);
 }
 
+const NAMED_SKILL_FILES = new Set(["skill.md", "SKILL.md"]);
+const IGNORE_LOOSE_MD = new Set([
+  "readme.md",
+  "changelog.md",
+  "license.md",
+  "licence.md",
+]);
+
+function isSkillFileName(name) {
+  if (NAMED_SKILL_FILES.has(name)) return true;
+  if (!/\.md$/i.test(name)) return false;
+  return !IGNORE_LOOSE_MD.has(name.toLowerCase());
+}
+
 function findSkillFile(dir) {
   for (const name of ["SKILL.md", "skill.md"]) {
     const p = path.join(dir, name);
     if (exists(p) && !isDir(p)) return p;
   }
   return null;
+}
+
+function readLinkTarget(p) {
+  try {
+    return fs.readlinkSync(p);
+  } catch {
+    return "";
+  }
+}
+
+function describeInstall(p) {
+  let link = false;
+  let file = false;
+  let linkTarget = "";
+  try {
+    const listed = fs.lstatSync(p);
+    link = listed.isSymbolicLink();
+    if (link) {
+      linkTarget = readLinkTarget(p);
+      try {
+        file = fs.statSync(p).isFile();
+      } catch {
+        file = false;
+      }
+    } else {
+      file = listed.isFile();
+    }
+  } catch {
+    /* missing or unreadable */
+  }
+  return { link, file, linkTarget };
 }
 
 function contained(child, parent) {
@@ -177,12 +222,24 @@ function collectDirectSkills(root, list) {
     return;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     if (SKIP_WALK.has(entry.name)) continue;
-    const dir = path.resolve(path.join(root.root, entry.name));
-    const skillMd = findSkillFile(dir);
-    if (skillMd) {
-      list.push({ dir, skillMd, root });
+    const abs = path.resolve(path.join(root.root, entry.name));
+    const install = describeInstall(abs);
+    if (isDir(abs)) {
+      const skillMd = findSkillFile(abs);
+      if (skillMd) {
+        list.push({ dir: abs, skillMd, root, ...install, file: false });
+      }
+      continue;
+    }
+    if (install.file && isSkillFileName(entry.name)) {
+      list.push({
+        dir: abs,
+        skillMd: abs,
+        root,
+        ...install,
+        file: true,
+      });
     }
   }
 }
@@ -208,6 +265,23 @@ function walkSkillContainers(dir, root, list, depth = 0) {
 }
 
 function dirSizeAndFiles(dir) {
+  try {
+    const followed = fs.statSync(dir);
+    if (followed.isFile()) {
+      return {
+        files: [
+          {
+            path: path.basename(dir),
+            size: followed.size,
+            mtime: followed.mtimeMs,
+          },
+        ],
+        bytes: followed.size,
+      };
+    }
+  } catch {
+    /* walk as a directory when we can */
+  }
   const files = [];
   let bytes = 0;
   const walk = (current, rel, depth) => {
@@ -246,7 +320,8 @@ function dirSizeAndFiles(dir) {
   return { files, bytes };
 }
 
-function summarizeSkill(dir, skillMd, root) {
+function summarizeSkill(item) {
+  const { dir, skillMd, root } = item;
   let text = "";
   let mtime = 0;
   let size = 0;
@@ -259,7 +334,8 @@ function summarizeSkill(dir, skillMd, root) {
     return null;
   }
   const { data } = parseFrontmatter(text);
-  const slug = path.basename(dir);
+  const base = path.basename(dir);
+  const slug = item.file ? base.replace(/\.md$/i, "") : base;
   const name =
     (typeof data.name === "string" && data.name) ||
     (typeof data.displayName === "string" && data.displayName) ||
@@ -278,6 +354,10 @@ function summarizeSkill(dir, skillMd, root) {
     kind: kindFor(root),
     path: dir,
     skillFile: skillMd,
+    skillRel: path.basename(skillMd),
+    file: Boolean(item.file),
+    link: Boolean(item.link),
+    linkTarget: item.linkTarget || "",
     mtime,
     skillSize: size,
   };
@@ -302,7 +382,7 @@ export function scanSkills() {
   const skills = [];
   const byId = new Map();
   for (const item of byPath.values()) {
-    const summary = summarizeSkill(item.dir, item.skillMd, item.root);
+    const summary = summarizeSkill(item);
     if (!summary) continue;
     skills.push(summary);
     byId.set(summary.id, summary);
@@ -333,6 +413,22 @@ export function readSkill(summary) {
 }
 
 export function readSkillFile(summary, relPath) {
+  if (summary.file) {
+    const abs = real(summary.skillFile);
+    const st = fs.statSync(abs);
+    if (st.size > 1_500_000) {
+      const err = new Error("File too large to preview");
+      err.status = 413;
+      throw err;
+    }
+    const buf = fs.readFileSync(abs);
+    return {
+      path: path.basename(summary.skillFile),
+      size: st.size,
+      binary: false,
+      content: buf.toString("utf8"),
+    };
+  }
   const normalized = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, "");
   const abs = real(path.join(summary.path, normalized));
   const root = real(summary.path);
@@ -378,8 +474,11 @@ export function assertDeletable(summary, roots) {
     err.status = 403;
     throw err;
   }
-  if (!findSkillFile(target)) {
-    const err = new Error("Not a skill directory");
+  const install = describeInstall(target);
+  const isFolderSkill = isDir(target) && findSkillFile(target);
+  const isFileSkill = install.file && isSkillFileName(path.basename(target));
+  if (!isFolderSkill && !isFileSkill) {
+    const err = new Error("Not a skill path");
     err.status = 400;
     throw err;
   }
@@ -388,7 +487,7 @@ export function assertDeletable(summary, roots) {
 
 export function deleteSkillDir(target) {
   const st = fs.lstatSync(target);
-  if (st.isSymbolicLink()) {
+  if (st.isSymbolicLink() || st.isFile()) {
     fs.unlinkSync(target);
     return;
   }
