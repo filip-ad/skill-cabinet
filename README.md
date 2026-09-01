@@ -29,10 +29,11 @@ Requires Node 20+.
 
 ## What it can do
 
-- Filter by drawer and search name, description, path, or frontmatter
+- Filter by drawer and search name, description, path, origin, or frontmatter
 - Filter symlink cards: all, only, or hide
 - Read the skill body (rendered or source), YAML frontmatter, and extra files
 - See whether a skill is a folder, a file, or a symlink
+- Follow a GitHub origin when the skill names it, or when the install path encodes it. Origins taken from a parent plugin or git remote are marked inferred.
 - Delete one skill or several at once
 - Switch skins from the Theme menu (Carbon is the default)
 

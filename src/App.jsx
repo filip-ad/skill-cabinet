@@ -57,6 +57,8 @@ function matchesQuery(skill, q) {
     skill.file ? "file" : "",
     skill.link ? "symlink link" : "",
     skill.linkTarget || "",
+    skill.origin?.label || "",
+    skill.origin?.url || "",
     JSON.stringify(skill.frontmatter || {}),
   ]
     .join("\n")
@@ -79,7 +81,38 @@ function kindStamp(kind) {
   return "user";
 }
 
-function formStamps(skill) {
+function originTitle(origin) {
+  if (origin.certainty === "inferred") {
+    return "Taken from a parent plugin or git remote. This may name the wrapper rather than this skill's own repository.";
+  }
+  return "Taken from the skill's frontmatter or install path.";
+}
+
+function OriginLink({ origin }) {
+  if (!origin?.url) return null;
+  const inferred = origin.certainty === "inferred";
+  return (
+    <>
+      <a
+        href={origin.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-origin={origin.kind}
+        title={originTitle(origin)}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {origin.label}
+      </a>
+      {inferred ? (
+        <span data-origin-certainty="inferred" title={originTitle(origin)}>
+          inferred
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function formStamps(skill, { origin = "attested" } = {}) {
   const marks = [];
   if (skill.link) {
     marks.push(
@@ -94,6 +127,12 @@ function formStamps(skill) {
         file
       </span>,
     );
+  }
+  if (
+    skill.origin &&
+    (origin === "all" || skill.origin.certainty === "attested")
+  ) {
+    marks.push(<OriginLink key="origin" origin={skill.origin} />);
   }
   return marks;
 }
@@ -158,6 +197,7 @@ export default function App() {
   const [linkFilter, setLinkFilter] = useState(readStoredLinkFilter);
   const searchRef = useRef(null);
   const listRef = useRef(null);
+  const readerRef = useRef(null);
 
   async function load(refresh = false) {
     setLoading(true);
@@ -231,6 +271,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || !readerRef.current) return;
+    if (window.matchMedia("(max-width: 960px)").matches) {
+      readerRef.current.scrollIntoView({ block: "nearest" });
+    }
   }, [selectedId]);
 
   useEffect(() => {
@@ -503,7 +550,7 @@ export default function App() {
           </ol>
         </section>
 
-        <main className="reader" aria-live="polite">
+        <main ref={readerRef} className="reader" aria-live="polite">
           {slip ? (
             <DeleteConfirm
               slip={slip}
@@ -602,7 +649,7 @@ function SkillLeaf({
   const keys = Object.keys(fm);
   const files = detail?.files || [];
   const skillRel = selected.skillRel || "SKILL.md";
-  const showDisk = selected.file || selected.link;
+  const showDisk = selected.file || selected.link || selected.origin;
   const body = preview
     ? preview.binary
       ? `Binary file · ${formatBytes(preview.size)}`
@@ -620,7 +667,7 @@ function SkillLeaf({
           <p className="path">{selected.path}</p>
           <p className="stamps">
             <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
-            {formStamps(selected)}
+            {formStamps(selected, { origin: "all" })}
             {detail ? <span>{formatBytes(detail.bytes)}</span> : null}
             <span>{formatWhen(selected.mtime)}</span>
           </p>
@@ -666,6 +713,14 @@ function SkillLeaf({
               <div>
                 <dt>symlink</dt>
                 <dd>{selected.linkTarget || "yes"}</dd>
+              </div>
+            ) : null}
+            {selected.origin ? (
+              <div>
+                <dt>origin</dt>
+                <dd>
+                  <OriginLink origin={selected.origin} />
+                </dd>
               </div>
             ) : null}
           </dl>
