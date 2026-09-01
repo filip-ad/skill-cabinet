@@ -128,16 +128,6 @@ function deleteIds(ids) {
   return { deleted, errors };
 }
 
-app.delete("/api/skills/:id", (req, res) => {
-  try {
-    const result = deleteIds([req.params.id]);
-    const status = result.deleted.length ? 200 : 400;
-    res.status(status).json(result);
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
 app.post("/api/skills/delete", (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
