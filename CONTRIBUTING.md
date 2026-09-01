@@ -18,6 +18,7 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The API binds to localhost 
 ```bash
 npm run build
 npm start
+npm test
 ```
 
 ## Layout
@@ -26,6 +27,7 @@ npm start
 - `server/` scan and HTTP API
 - `bin/skill-cabinet.js` production entry
 - `PRODUCT.md` users, tone, and design principles
+- `DESIGN.md` surfaces, named rules, and anti-patterns
 
 ## Pull requests
 
@@ -33,7 +35,7 @@ npm start
 - Match the existing copy: library language, not startup language. Destructive actions say **Delete**.
 - Do not bind the server to a public interface.
 - Do not commit secrets, `.env` files, or `dist/`.
-- `npm run build` should succeed.
+- `npm run build` and `npm test` should succeed.
 
 Open an issue first for large scans, new skill roots, or destructive-path changes.
 

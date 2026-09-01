@@ -4,6 +4,8 @@
 
 A local catalog for agent skills installed on your machine. It scans user-level drawers such as `.agents`, `.claude`, `.codex`, `.cursor` (including plugins), and other `~/.* /skills` folders, lets you read each skill and its frontmatter, and can delete skill folders from disk.
 
+<img src="docs/images/cabinet.jpg" alt="Skill Cabinet: drawers, index cards, and a skill on the reading desk" width="960">
+
 ## Run
 
 ```bash
@@ -29,15 +31,17 @@ Requires Node 20+.
 
 ## What it can do
 
-- Filter by drawer and search name, description, path, origin, or frontmatter
+- Filter by drawer and search name, description, path, origin, copies, or frontmatter
 - Filter symlink cards: all, only, or hide
+- Filter risk: all, elevated, or hide
 - Read the skill body (rendered or source), YAML frontmatter, and extra files
 - See whether a skill is a folder, a file, or a symlink
 - Follow a GitHub origin when the skill names it, or when the install path encodes it. Origins taken from a parent plugin or git remote are marked inferred.
-- Delete one skill or several at once
-- Switch skins from the Theme menu (Carbon is the default)
+- Notice identical copies across drawers, and static risk in the skill body
+- Delete one skill or several at once. A symlink is unlinked; its target stays.
 
 **Delete** removes the skill from disk (folder, file, or link). There is no undo. Builtin Cursor skills and plugin-cache copies may come back the next time that tool updates.
+- Switch skins from the Theme menu (Carbon is the default)
 
 Keys: `j`/`k` move, `/` find, `x` mark, `d` delete.
 

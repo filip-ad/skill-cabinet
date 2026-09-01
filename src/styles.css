@@ -74,12 +74,20 @@ h3 {
 }
 
 .masthead {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--space-xs) var(--space-l);
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--space-m) var(--space-l);
   padding: var(--space-s) var(--space-m);
   border-bottom: 1px solid var(--ink);
+}
+
+.mast-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-l);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .edition {
@@ -96,6 +104,7 @@ h3 {
   align-items: center;
   gap: var(--space-s);
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .mark {
@@ -185,8 +194,10 @@ h3 {
 
 .mast-tools {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-m);
+  flex-shrink: 0;
 }
 
 .theme-select {
@@ -220,14 +231,11 @@ h3 {
   outline-offset: 2px;
 }
 
-.link-filter select {
-  min-width: 5.5rem;
-}
-
 .finder {
   display: grid;
   gap: var(--space-2xs);
-  min-width: 0;
+  min-width: 12rem;
+  flex: 1 1 auto;
 }
 
 .finder label {
@@ -261,25 +269,63 @@ h3 {
 
 .census {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-xs);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.08rem;
   margin: 0;
-  line-height: 1;
-  white-space: nowrap;
+  padding-right: var(--space-m);
+  border-right: 1px solid var(--rule-faint);
+  line-height: 1.1;
+}
+
+.census p {
+  display: grid;
+  grid-template-columns: 4ch auto;
+  column-gap: 0.4rem;
+  align-items: baseline;
+  margin: 0;
 }
 
 .census b {
-  font-size: 1.05rem;
-  font-variant-numeric: oldstyle-nums;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
   font-weight: 650;
+  text-align: right;
 }
 
 .census span {
   font-family: var(--chrome);
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   letter-spacing: var(--label-tracking);
   text-transform: uppercase;
   color: var(--ink-soft);
+}
+
+.reshelve {
+  flex-shrink: 0;
+  margin: 0;
+  font-family: var(--chrome);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--paper);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: var(--select-radius);
+  padding: 0.4rem 0.9rem;
+  box-shadow: 2px 2px 0 color-mix(in oklch, var(--ink) 28%, transparent);
+}
+
+.reshelve:hover {
+  background: var(--brass);
+  border-color: var(--brass);
+  color: var(--paper);
+}
+
+.reshelve:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .keys {
@@ -397,13 +443,68 @@ h3 {
 }
 
 .tray-head {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(2.1rem, auto) auto;
+  grid-template-areas:
+    "mark delete"
+    "filters filters";
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem 0.7rem;
+  column-gap: var(--space-s);
+  row-gap: var(--space-xs);
+  padding: var(--space-s);
   border-bottom: 1px solid var(--ink);
+}
+
+.tray-head .check {
+  grid-area: mark;
+  min-width: 0;
+}
+
+.tray-head .stamp {
+  grid-area: delete;
+  font-size: 0.72rem;
+  padding: 0.35rem 0.55rem;
+}
+
+.tray-filters {
+  grid-area: filters;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-s);
+  min-width: 0;
+}
+
+.tray-filter {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.tray-filter span {
+  font-family: var(--chrome);
+  font-size: 0.62rem;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.tray-filter select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ink);
+  border-radius: var(--select-radius);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 0.2rem 0.45rem;
+  font-family: var(--chrome);
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.tray-filter select:focus {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .check {
@@ -530,6 +631,19 @@ h3 {
   letter-spacing: 0.04em;
 }
 
+.meta [data-risk],
+.stamps [data-risk],
+.catalogue dt[data-risk] {
+  color: var(--stamp);
+}
+
+.meta [data-copies],
+.stamps [data-copies] {
+  color: var(--ink-soft);
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
 .tick {
   position: absolute;
   right: 0.55rem;
@@ -550,7 +664,6 @@ h3 {
 
 .leaf {
   padding: 1.6rem 2.4rem 4rem 2.2rem;
-  max-width: 52rem;
 }
 
 .leaf.empty {
@@ -657,6 +770,34 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.catalogue dd code {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  word-break: break-all;
+  color: var(--ink-soft);
+}
+
+.copy-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+  white-space: normal;
+}
+
+.copy-list button {
+  margin-right: 0.55rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brass);
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
 .folio ul {
   list-style: none;
   margin: 0;
@@ -754,6 +895,21 @@ h3 {
   display: block;
 }
 
+.slip-list .effect {
+  display: block;
+  font-family: var(--chrome);
+  font-size: 0.72rem;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--stamp);
+}
+
+.slip-list small {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--ink-soft);
+}
+
 .slip-list code {
   font-family: var(--mono);
   font-size: 0.8rem;
@@ -798,7 +954,16 @@ h3 {
 @media (max-width: 960px) {
   .masthead,
   .furniture {
+    flex-wrap: wrap;
     grid-template-columns: 1fr;
+  }
+
+  .mast-lead {
+    flex: 1 1 100%;
+  }
+
+  .finder {
+    flex: 1 1 16rem;
   }
 
   .masthead,

@@ -1,6 +1,6 @@
 {
   "name": "skill-cabinet",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Browse and delete agent skills installed on this machine across .agents, .claude, .codex, .cursor, and similar drawers.",
   "type": "module",
   "bin": {
@@ -16,6 +16,7 @@
     "dev": "concurrently -k -n api,web -c blue,green \"node --watch server/index.js\" \"vite\"",
     "build": "vite build",
     "start": "node bin/skill-cabinet.js",
+    "test": "node --test server/*.test.js",
     "prepare": "node scripts/ensure-dist.js",
     "prepublishOnly": "npm run build"
   },

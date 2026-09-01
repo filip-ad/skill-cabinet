@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import YAML from "yaml";
+import { auditSkill } from "./audit.js";
+import { deleteEffect } from "./delete-effect.js";
+
+export { deleteEffect };
 
 const HOME = os.homedir();
 
@@ -522,10 +526,9 @@ function dirSizeAndFiles(dir) {
       if (SKIP_WALK.has(entry.name)) continue;
       const abs = path.join(current, entry.name);
       const nextRel = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        if (entry.isDirectory() || (entry.isSymbolicLink() && isDir(abs))) {
-          walk(abs, nextRel, depth + 1);
-        }
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        walk(abs, nextRel, depth + 1);
       } else if (entry.isFile()) {
         let size = 0;
         let mtime = 0;
@@ -551,11 +554,13 @@ function summarizeSkill(item) {
   let text = "";
   let mtime = 0;
   let size = 0;
+  let raw;
   try {
     const st = fs.statSync(skillMd);
     mtime = st.mtimeMs;
     size = st.size;
-    text = fs.readFileSync(skillMd, "utf8");
+    raw = fs.readFileSync(skillMd);
+    text = raw.toString("utf8");
   } catch {
     return null;
   }
@@ -568,6 +573,12 @@ function summarizeSkill(item) {
     slug;
   const description =
     typeof data.description === "string" ? data.description : "";
+  const audited = auditSkill({
+    root: dir,
+    skillFile: skillMd,
+    text,
+    fileOnly: Boolean(item.file),
+  });
 
   return {
     id: idFor(dir),
@@ -585,9 +596,34 @@ function summarizeSkill(item) {
     link: Boolean(item.link),
     linkTarget: item.linkTarget || "",
     origin: inferOrigin(dir, data, item.linkTarget),
+    contentHash: crypto.createHash("sha256").update(raw).digest("hex"),
+    risk: audited.severity,
+    findings: audited.findings,
+    copies: [],
     mtime,
     skillSize: size,
   };
+}
+
+export function attachCopies(skills) {
+  const byHash = new Map();
+  for (const skill of skills) {
+    if (!skill.contentHash) continue;
+    const list = byHash.get(skill.contentHash) || [];
+    list.push(skill);
+    byHash.set(skill.contentHash, list);
+  }
+  for (const skill of skills) {
+    const group = byHash.get(skill.contentHash) || [];
+    skill.copies = group
+      .filter((other) => other.id !== skill.id)
+      .map((other) => ({
+        id: other.id,
+        scopeLabel: other.scopeLabel,
+        path: other.path,
+      }));
+  }
+  return skills;
 }
 
 export function scanSkills() {
@@ -616,13 +652,52 @@ export function scanSkills() {
     byId.set(summary.id, summary);
   }
 
+  attachCopies(skills);
+
   skills.sort((a, b) => {
     const scope = a.scopeLabel.localeCompare(b.scopeLabel);
     if (scope !== 0) return scope;
     return a.name.localeCompare(b.name);
   });
 
-  return { roots, skills, byId };
+  return { roots, skills, byId, census: censusOf(skills) };
+}
+
+function censusOf(skills) {
+  const hashes = new Set();
+  let hashed = 0;
+  for (const skill of skills) {
+    if (!skill.contentHash) continue;
+    hashes.add(skill.contentHash);
+    hashed += 1;
+  }
+  const unique = hashes.size + (skills.length - hashed);
+  return {
+    total: skills.length,
+    unique,
+    duplicates: Math.max(0, skills.length - unique),
+  };
+}
+
+export function toCatalogSkill(skill) {
+  return {
+    id: skill.id,
+    name: skill.name,
+    slug: skill.slug,
+    description: skill.description,
+    scopeId: skill.scopeId,
+    scopeLabel: skill.scopeLabel,
+    kind: skill.kind,
+    path: skill.path,
+    skillRel: skill.skillRel,
+    file: skill.file,
+    link: skill.link,
+    linkTarget: skill.linkTarget,
+    origin: skill.origin,
+    risk: skill.risk,
+    copyCount: skill.copies.length,
+    mtime: skill.mtime,
+  };
 }
 
 export function readSkill(summary) {

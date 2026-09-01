@@ -9,6 +9,7 @@ import {
   readSkillFile,
   assertDeletable,
   deleteSkillDir,
+  toCatalogSkill,
 } from "./scan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,12 +18,9 @@ const PREFERRED_PORT = Number(process.env.PORT || 3781);
 const isProd = process.env.NODE_ENV === "production";
 
 let cache = { at: 0, payload: null };
-const TTL_MS = 2000;
 
 function getIndex(force = false) {
-  if (!force && cache.payload && Date.now() - cache.at < TTL_MS) {
-    return cache.payload;
-  }
+  if (!force && cache.payload) return cache.payload;
   const payload = scanSkills();
   cache = { at: Date.now(), payload };
   return payload;
@@ -65,8 +63,9 @@ app.get("/api/skills", (req, res) => {
       home: process.env.HOME,
       scannedAt: cache.at,
       total: index.skills.length,
+      census: index.census,
       scopes,
-      skills: index.skills,
+      skills: index.skills.map(toCatalogSkill),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
