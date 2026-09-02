@@ -9,7 +9,16 @@ import { skillInvocation } from "./invocation.js";
 
 export { deleteEffect };
 
-const HOME = os.homedir();
+function homeDir() {
+  return os.homedir();
+}
+
+// Quarantined skills live here, outside every drawer an agent reads.
+// discoverRoots only adopts folders named skills or skill, so the cabinet
+// cannot re-index its own quarantine as a live drawer.
+export function quarantineRoot() {
+  return path.join(homeDir(), ".skill-cabinet", "quarantine");
+}
 
 const SKIP_HOME_DOTDIRS = new Set([
   ".cache",
@@ -29,6 +38,7 @@ const SKIP_HOME_DOTDIRS = new Set([
   ".android",
   ".gradle",
   ".java",
+  ".skill-cabinet",
 ]);
 
 const SKIP_WALK = new Set([
@@ -47,7 +57,7 @@ function exists(p) {
   }
 }
 
-function isDir(p) {
+export function isDir(p) {
   try {
     return fs.statSync(p).isDirectory();
   } catch {
@@ -101,26 +111,33 @@ function describeInstall(p) {
   let link = false;
   let file = false;
   let linkTarget = "";
+  let dev = 0;
+  let ino = 0;
   try {
     const listed = fs.lstatSync(p);
     link = listed.isSymbolicLink();
     if (link) {
       linkTarget = readLinkTarget(p);
       try {
-        file = fs.statSync(p).isFile();
+        const followed = fs.statSync(p);
+        file = followed.isFile();
+        dev = followed.dev;
+        ino = followed.ino;
       } catch {
         file = false;
       }
     } else {
       file = listed.isFile();
+      dev = listed.dev;
+      ino = listed.ino;
     }
   } catch {
     /* missing or unreadable */
   }
-  return { link, file, linkTarget };
+  return { link, file, linkTarget, dev, ino };
 }
 
-function contained(child, parent) {
+export function contained(child, parent) {
   const c = path.resolve(child);
   const p = path.resolve(parent);
   return c === p || c.startsWith(p + path.sep);
@@ -234,6 +251,8 @@ function originFromPath(p) {
 
 function originFromPluginFile(file) {
   try {
+    const st = fs.statSync(file, { throwIfNoEntry: false });
+    if (!st || !st.isFile()) return null;
     const data = JSON.parse(fs.readFileSync(file, "utf8"));
     const repo = originFromValue(data.repository);
     if (repo) return repo;
@@ -247,7 +266,8 @@ function originFromPluginFile(file) {
 function originFromGitDir(dir) {
   const gitPath = path.join(dir, ".git");
   try {
-    const listed = fs.lstatSync(gitPath);
+    const listed = fs.lstatSync(gitPath, { throwIfNoEntry: false });
+    if (!listed) return null;
     let configPath = "";
     if (listed.isFile()) {
       const text = fs.readFileSync(gitPath, "utf8");
@@ -330,7 +350,7 @@ function originFromAncestors(start) {
       return fromCachedOrigin(packed, startDir);
     }
     const parent = path.dirname(current);
-    if (parent === current || parent === HOME) break;
+    if (parent === current || parent === homeDir()) break;
     current = parent;
   }
   for (const dir of chain) originCache.set(dir, null);
@@ -382,17 +402,17 @@ export function discoverRoots() {
   const roots = [];
   const seen = new Set();
 
-  const add = (scopeId, scopeLabel, root, kind, recursive = false) => {
+  const add = (scopeId, scopeLabel, root, kind, recursive = false, deep = false) => {
     if (!exists(root) || !isDir(root)) return;
     const resolved = real(root);
     if (seen.has(resolved)) return;
     seen.add(resolved);
-    roots.push({ scopeId, scopeLabel, root: resolved, kind, recursive });
+    roots.push({ scopeId, scopeLabel, root: resolved, kind, recursive, deep });
   };
 
   let homeEntries = [];
   try {
-    homeEntries = fs.readdirSync(HOME, { withFileTypes: true });
+    homeEntries = fs.readdirSync(homeDir(), { withFileTypes: true });
   } catch {
     homeEntries = [];
   }
@@ -402,7 +422,7 @@ export function discoverRoots() {
     if (!entry.name.startsWith(".")) continue;
     if (SKIP_HOME_DOTDIRS.has(entry.name)) continue;
 
-    const base = path.join(HOME, entry.name);
+    const base = path.join(homeDir(), entry.name);
     const scopeId = entry.name.slice(1);
 
     for (const folder of ["skills", "skill"]) {
@@ -430,22 +450,66 @@ export function discoverRoots() {
   add(
     "gemini",
     ".gemini/antigravity",
-    path.join(HOME, ".gemini/antigravity/skills"),
+    path.join(homeDir(), ".gemini/antigravity/skills"),
     "user",
     false,
   );
   add(
     "gemini",
     ".gemini/antigravity (global)",
-    path.join(HOME, ".gemini/antigravity/global_skills"),
+    path.join(homeDir(), ".gemini/antigravity/global_skills"),
     "user",
     false,
   );
 
+  const hermesProfiles = path.join(homeDir(), ".hermes", "profiles");
+  let profileEntries = [];
+  try {
+    profileEntries = fs.readdirSync(hermesProfiles, { withFileTypes: true });
+  } catch {
+    profileEntries = [];
+  }
+  for (const entry of profileEntries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    if (entry.name.startsWith(".")) continue;
+    add(
+      `hermes-profile:${entry.name}`,
+      `Hermes profile · ${entry.name}`,
+      path.join(hermesProfiles, entry.name, "skills"),
+      "user",
+      false,
+      true,
+    );
+  }
+
+  let quarantineScopes = [];
+  try {
+    quarantineScopes = fs.readdirSync(quarantineRoot(), { withFileTypes: true });
+  } catch {
+    quarantineScopes = [];
+  }
+  for (const entry of quarantineScopes) {
+    if (!entry.isDirectory()) continue;
+    const folder = path.join(quarantineRoot(), entry.name);
+    if (!exists(folder) || !isDir(folder)) continue;
+    const resolved = real(folder);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    roots.push({
+      scopeId: "quarantine",
+      scopeLabel: "Quarantine",
+      root: resolved,
+      kind: "quarantine",
+      recursive: false,
+      fromScope: entry.name,
+    });
+  }
+
   return roots;
 }
 
-function collectDirectSkills(root, list) {
+function collectDirectSkills(root, list, nested = false, depth = 0) {
+  if (nested && depth > 14) return;
   let entries;
   try {
     entries = fs.readdirSync(root.root, { withFileTypes: true });
@@ -471,6 +535,8 @@ function collectDirectSkills(root, list) {
       const skillMd = findSkillFile(abs);
       if (skillMd) {
         list.push({ dir: abs, skillMd, root, ...install, file: false });
+      } else if (nested) {
+        collectDirectSkills({ ...root, root: abs }, list, true, depth + 1);
       }
       continue;
     }
@@ -598,44 +664,65 @@ function danglingSummary(item) {
     physicality: "broken",
     refTarget: "",
     refSkillId: "",
+    quarantined: root.kind === "quarantine",
+    fromScope: root.fromScope || "",
   };
 }
 
-function summarizeSkill(item) {
+function summarizeSkill(item, memo, realpaths) {
   const { dir, skillMd, root } = item;
   if (item.dangling) return danglingSummary(item);
-  let text = "";
-  let mtime = 0;
-  let size = 0;
-  let raw;
-  try {
-    const st = fs.statSync(skillMd);
-    mtime = st.mtimeMs;
-    size = st.size;
-    raw = fs.readFileSync(skillMd);
-    text = raw.toString("utf8");
-  } catch {
-    return null;
+  const identity = item.dev || item.ino ? `${item.dev}:${item.ino}` : real(dir);
+  const memoKey = `${identity}|${item.file ? "file" : "dir"}`;
+  let shared = memo.get(memoKey);
+  if (!shared) {
+    let mtime = 0;
+    let size = 0;
+    let raw;
+    try {
+      const st = fs.statSync(skillMd);
+      mtime = st.mtimeMs;
+      size = st.size;
+      raw = fs.readFileSync(skillMd);
+    } catch {
+      return null;
+    }
+    const text = raw.toString("utf8");
+    const { data } = parseFrontmatter(text);
+    shared = {
+      data,
+      mtime,
+      size,
+      contentHash: crypto.createHash("sha256").update(raw).digest("hex"),
+      audited: auditSkill({
+        root: dir,
+        skillFile: skillMd,
+        text,
+        fileOnly: Boolean(item.file),
+      }),
+    };
+    memo.set(memoKey, shared);
   }
-  const { data } = parseFrontmatter(text);
+  let refTarget = "";
+  if (item.link) {
+    refTarget = realpaths.get(identity) || "";
+    if (!refTarget) {
+      refTarget = real(dir);
+      realpaths.set(identity, refTarget);
+    }
+  }
   const base = path.basename(dir);
   const slug = item.file ? base.replace(/\.md$/i, "") : base;
   const name =
-    (typeof data.name === "string" && data.name) ||
-    (typeof data.displayName === "string" && data.displayName) ||
+    (typeof shared.data.name === "string" && shared.data.name) ||
+    (typeof shared.data.displayName === "string" && shared.data.displayName) ||
     slug;
   const description =
-    typeof data.description === "string" ? data.description : "";
-  const audited = auditSkill({
-    root: dir,
-    skillFile: skillMd,
-    text,
-    fileOnly: Boolean(item.file),
-  });
+    typeof shared.data.description === "string" ? shared.data.description : "";
   const when = skillInvocation({
     skillDir: dir,
     fileOnly: Boolean(item.file),
-    frontmatter: data,
+    frontmatter: shared.data,
     description,
   });
 
@@ -644,7 +731,7 @@ function summarizeSkill(item) {
     name,
     slug,
     description,
-    frontmatter: data,
+    frontmatter: shared.data,
     scopeId: root.scopeId,
     scopeLabel: root.scopeLabel,
     kind: kindFor(root),
@@ -654,18 +741,20 @@ function summarizeSkill(item) {
     file: Boolean(item.file),
     link: Boolean(item.link),
     linkTarget: item.linkTarget || "",
-    origin: inferOrigin(dir, data, item.linkTarget),
+    origin: inferOrigin(dir, shared.data, item.linkTarget),
     invocation: when.invocation,
     invocationEvidence: when.invocationEvidence,
-    contentHash: crypto.createHash("sha256").update(raw).digest("hex"),
-    risk: audited.severity,
-    findings: audited.findings,
+    contentHash: shared.contentHash,
+    risk: shared.audited.severity,
+    findings: shared.audited.findings.slice(),
     copies: [],
-    mtime,
-    skillSize: size,
+    mtime: shared.mtime,
+    skillSize: shared.size,
     physicality: item.link ? "reference" : "physical",
-    refTarget: item.link ? real(dir) : "",
+    refTarget,
     refSkillId: "",
+    quarantined: root.kind === "quarantine",
+    fromScope: root.fromScope || "",
   };
 }
 
@@ -697,9 +786,13 @@ export function attachCopies(skills) {
 
 export function scanRoots(roots) {
   originCache = new Map();
+  const memo = new Map();
+  const realpaths = new Map();
   const found = [];
   for (const root of roots) {
-    if (root.recursive) {
+    if (root.deep) {
+      collectDirectSkills(root, found, true);
+    } else if (root.recursive) {
       walkSkillContainers(root.root, root, found);
     } else {
       collectDirectSkills(root, found);
@@ -714,7 +807,7 @@ export function scanRoots(roots) {
   const skills = [];
   const byId = new Map();
   for (const item of byPath.values()) {
-    const summary = summarizeSkill(item);
+    const summary = summarizeSkill(item, memo, realpaths);
     if (!summary) continue;
     skills.push(summary);
     byId.set(summary.id, summary);
@@ -746,15 +839,32 @@ export function scanSkills() {
 }
 
 function censusOf(skills) {
-  const physical = skills.filter((skill) => skill.physicality === "physical");
-  const hashes = new Set();
+  const live = skills.filter((skill) => !skill.quarantined);
+  const physical = live.filter((skill) => skill.physicality === "physical");
+  const byHash = new Map();
   for (const skill of physical) {
-    if (skill.contentHash) hashes.add(skill.contentHash);
+    if (!skill.contentHash) continue;
+    byHash.set(skill.contentHash, (byHash.get(skill.contentHash) || 0) + 1);
+  }
+  let duplicateCopies = 0;
+  let duplicateBytes = 0;
+  for (const skill of physical) {
+    const twins = byHash.get(skill.contentHash) || 1;
+    if (twins > 1) {
+      duplicateCopies += 1;
+      duplicateBytes += dirSizeAndFiles(skill.path).bytes;
+    }
   }
   return {
-    total: skills.length,
-    unique: hashes.size,
-    duplicates: Math.max(0, physical.length - hashes.size),
+    total: live.length,
+    physical: physical.length,
+    unique: byHash.size,
+    duplicateCopies,
+    duplicateBytes,
+    references: live.filter((skill) => skill.physicality === "reference")
+      .length,
+    broken: live.filter((skill) => skill.physicality === "broken").length,
+    duplicates: duplicateCopies,
   };
 }
 
@@ -780,7 +890,10 @@ export function toCatalogSkill(skill) {
     refTarget: skill.refTarget,
     refSkillId: skill.refSkillId,
     copyCount: skill.copies.length,
+    copies: skill.copies,
     mtime: skill.mtime,
+    quarantined: Boolean(skill.quarantined),
+    fromScope: skill.fromScope || "",
   };
 }
 
@@ -860,13 +973,13 @@ export function readSkillFile(summary, relPath) {
   };
 }
 
-export function assertDeletable(summary, roots) {
+export function assertSkillTarget(summary, roots, action = "delete") {
   const target = path.resolve(summary.path);
   const ok = roots.some((r) => contained(target, r.root) && path.resolve(r.root) !== target);
-  if (!ok || target === HOME) {
+  if (!ok || target === homeDir()) {
     const err = new Error(
       ok
-        ? "Refusing to delete a cabinet root"
+        ? `Refusing to ${action} a cabinet root`
         : "Skill is outside known cabinet roots",
     );
     err.status = 403;
@@ -882,6 +995,10 @@ export function assertDeletable(summary, roots) {
     throw err;
   }
   return target;
+}
+
+export function assertDeletable(summary, roots) {
+  return assertSkillTarget(summary, roots, "delete");
 }
 
 export function deleteSkillDir(target) {

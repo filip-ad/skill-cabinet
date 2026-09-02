@@ -100,7 +100,7 @@ test("byte-identical physical skills remain copies", () => {
       b.copies.map((c) => c.id),
       [a.id],
     );
-    assert.equal(result.census.duplicates, 1);
+    assert.equal(result.census.duplicates, 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
