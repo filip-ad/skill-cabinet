@@ -45,6 +45,25 @@ function openBrowser(url) {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+export function isLoopbackOrigin(origin) {
+  if (!origin) return false;
+  try {
+    return LOOPBACK_HOSTS.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function requireLoopbackOrigin(req, res, next) {
+  if (!isLoopbackOrigin(req.headers.origin)) {
+    res.status(403).json({ error: "Cross-origin request blocked" });
+    return;
+  }
+  next();
+}
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -170,17 +189,7 @@ function deleteIds(ids) {
   return { deleted, errors };
 }
 
-app.delete("/api/skills/:id", (req, res) => {
-  try {
-    const result = deleteIds([req.params.id]);
-    const status = result.deleted.length ? 200 : 400;
-    res.status(status).json(result);
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post("/api/skills/delete", (req, res) => {
+app.post("/api/skills/delete", requireLoopbackOrigin, (req, res) => {
   try {
     const ids = idsFrom(req.body);
     if (!ids.length) {
@@ -193,7 +202,7 @@ app.post("/api/skills/delete", (req, res) => {
   }
 });
 
-app.post("/api/skills/quarantine", (req, res) => {
+app.post("/api/skills/quarantine", requireLoopbackOrigin, (req, res) => {
   try {
     const ids = idsFrom(req.body);
     if (!ids.length) {
@@ -206,7 +215,7 @@ app.post("/api/skills/quarantine", (req, res) => {
   }
 });
 
-app.post("/api/skills/restore", (req, res) => {
+app.post("/api/skills/restore", requireLoopbackOrigin, (req, res) => {
   try {
     const ids = idsFrom(req.body);
     if (!ids.length) {
@@ -235,7 +244,7 @@ if (isProd) {
   });
 }
 
-function start(port, attemptsLeft = 20) {
+function start(port = PREFERRED_PORT, attemptsLeft = 20) {
   const server = app.listen(port, "127.0.0.1");
   server.on("listening", () => {
     const { port: bound } = server.address();
@@ -257,4 +266,8 @@ function start(port, attemptsLeft = 20) {
   });
 }
 
-start(PREFERRED_PORT);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  start(PREFERRED_PORT);
+}
+
+export { app, start };
