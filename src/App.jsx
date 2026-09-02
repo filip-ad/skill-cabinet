@@ -12,19 +12,19 @@ import {
 } from "./api.js";
 import Logo from "./Logo.jsx";
 import {
-  LINK_FILTERS,
+  FORM_FILTERS,
   RISK_FILTERS,
   INVOCATION_FILTERS,
   THEMES,
   applyTheme,
-  matchesLinkFilter,
+  matchesFormFilter,
   matchesRiskFilter,
   matchesInvocationFilter,
-  readStoredLinkFilter,
+  readStoredFormFilter,
   readStoredRiskFilter,
   readStoredInvocationFilter,
   readStoredTheme,
-  writeStoredLinkFilter,
+  writeStoredFormFilter,
   writeStoredRiskFilter,
   writeStoredInvocationFilter,
   writeStoredTheme,
@@ -276,16 +276,16 @@ function ThemeSelect() {
   );
 }
 
-function LinkFilterSelect({ value, onChange }) {
+function FormFilterSelect({ value, onChange }) {
   return (
     <label className="tray-filter">
-      <span>Symlinks</span>
+      <span>Form</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        aria-label="Symlink filter"
+        aria-label="Form filter"
       >
-        {LINK_FILTERS.map((item) => (
+        {FORM_FILTERS.map((item) => (
           <option key={item.id} value={item.id}>
             {item.label}
           </option>
@@ -348,7 +348,7 @@ export default function App() {
   const [view, setView] = useState("manuscript");
   const [slip, setSlip] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [linkFilter, setLinkFilter] = useState(readStoredLinkFilter);
+  const [formFilter, setFormFilter] = useState(readStoredFormFilter);
   const [riskFilter, setRiskFilter] = useState(readStoredRiskFilter);
   const [invocationFilter, setInvocationFilter] = useState(
     readStoredInvocationFilter,
@@ -393,11 +393,11 @@ export default function App() {
     () =>
       skills.filter(
         (s) =>
-          matchesLinkFilter(s, linkFilter) &&
+          matchesFormFilter(s, formFilter) &&
           matchesRiskFilter(s, riskFilter) &&
           matchesInvocationFilter(s, invocationFilter),
       ),
-    [skills, linkFilter, riskFilter, invocationFilter],
+    [skills, formFilter, riskFilter, invocationFilter],
   );
   const live = useMemo(
     () => linked.filter((s) => !s.quarantined),
@@ -548,6 +548,11 @@ export default function App() {
     setScopeId(nextId);
   }
 
+  function applyFormFilter(next) {
+    writeStoredFormFilter(next);
+    setFormFilter(next);
+  }
+
   function toggleChecked(id) {
     setChecked((prev) => {
       const next = new Set(prev);
@@ -627,14 +632,14 @@ export default function App() {
           <div className="wordmark">
             <Logo className="mark" />
             <div className="wordmark-text">
-              <p className="edition">Local filesystem · user cabinet</p>
               <h1>Skill Cabinet</h1>
             </div>
           </div>
-          <div className="finder">
-            <label>
-              <span>Find</span>
+          <div className="mast-chrome">
+            <div className="finder">
+              <label htmlFor="cabinet-find">Find</label>
               <input
+                id="cabinet-find"
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -642,43 +647,12 @@ export default function App() {
                 type="search"
                 spellCheck="false"
               />
-            </label>
-            <p className="keys">
-              j k move · / find · x mark · q quarantine · r restore · d delete
-            </p>
-          </div>
-        </div>
-        <div className="mast-tools">
-          <div className="census">
-            <p>
-              <b>{loading ? "…" : census.total}</b>
-              <span>in house</span>
-            </p>
-            <p>
-              <b>{loading ? "…" : census.physical}</b>
-              <span>physical</span>
-              {census.duplicateCopies ? (
-                <small>
-                  {census.duplicateCopies} copies ·{" "}
-                  {formatBytes(census.duplicateBytes)}
-                </small>
-              ) : null}
-            </p>
-            <p>
-              <b>{loading ? "…" : census.references}</b>
-              <span>references</span>
-            </p>
-            {census.broken ? (
-              <p>
-                <b>{loading ? "…" : census.broken}</b>
-                <span>broken</span>
+              <p className="keys">
+                j k move · / find · x mark · q quarantine · r restore · d delete
               </p>
-            ) : null}
+            </div>
+            <ThemeSelect />
           </div>
-          <button type="button" className="reshelve" onClick={() => load(true)}>
-            Reshelve
-          </button>
-          <ThemeSelect />
         </div>
       </header>
 
@@ -690,7 +664,45 @@ export default function App() {
       )}
 
       <div className="furniture">
-        <nav className="drawers" aria-label="Scopes">
+        <div className="rail">
+          <div className="house-tools">
+            <p className="census">
+              <b>{loading ? "…" : census.total}</b>
+              <span>in house</span>
+            </p>
+            <div className="house-note">
+              {loading ? null : (
+                <p className="ledger">
+                  {census.physical} physical
+                  {census.duplicateCopies
+                    ? ` · ${census.duplicateCopies} copies, ${formatBytes(census.duplicateBytes)}`
+                    : null}
+                  {` · ${census.references} references`}
+                  {census.broken ? (
+                    <>
+                      {" · "}
+                      <button
+                        type="button"
+                        data-form="broken"
+                        aria-pressed={formFilter === "broken"}
+                        onClick={() => {
+                          const next = formFilter === "broken" ? "all" : "broken";
+                          applyFormFilter(next);
+                          if (next === "broken" && inQuarantine) openScope("all");
+                        }}
+                      >
+                        {census.broken} broken
+                      </button>
+                    </>
+                  ) : null}
+                </p>
+              )}
+              <button type="button" className="reshelve" onClick={() => load(true)}>
+                Reshelve
+              </button>
+            </div>
+          </div>
+          <nav className="drawers" aria-label="Scopes">
           <button
             type="button"
             className={scopeId === "all" ? "drawer on" : "drawer"}
@@ -722,7 +734,8 @@ export default function App() {
             <span>Quarantine</span>
             <em>{quarantined.length}</em>
           </button>
-        </nav>
+          </nav>
+        </div>
 
         <section className="tray" aria-label="Skills">
           <div className="tray-head">
@@ -759,12 +772,9 @@ export default function App() {
               </div>
             ) : null}
             <div className="tray-filters">
-              <LinkFilterSelect
-                value={linkFilter}
-                onChange={(next) => {
-                  writeStoredLinkFilter(next);
-                  setLinkFilter(next);
-                }}
+              <FormFilterSelect
+                value={formFilter}
+                onChange={applyFormFilter}
               />
               <RiskFilterSelect
                 value={riskFilter}

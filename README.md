@@ -32,7 +32,7 @@ Requires Node 20+.
 ## What it can do
 
 - Filter by drawer and search name, description, path, origin, copies, or frontmatter
-- Filter symlink cards: all, only, or hide
+- Filter form: all, physical, references, or broken
 - Filter risk: all, elevated, or hide
 - Filter invocation: all, user only, model, hook, or off
 - Read the skill body (rendered or source), YAML frontmatter, and extra files
