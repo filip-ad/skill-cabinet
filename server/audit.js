@@ -193,7 +193,7 @@ function lineContext(rel, lines, lineIndex, rule, inShellFence) {
 
 function collectFromText(rel, content, findings) {
   const lines = content.split(/\r?\n/);
-  const starts = newlineStarts(content);
+  let starts = null;
   const fence = lines.map(() => false);
   let inFence = false;
   let language = "";
@@ -214,6 +214,7 @@ function collectFromText(rel, content, findings) {
     spec.pattern.lastIndex = 0;
     let match;
     while ((match = spec.pattern.exec(content))) {
+      if (!starts) starts = newlineStarts(content);
       const line = lineNumberAt(starts, match.index);
       const lineIndex = Math.max(0, line - 1);
       const context = lineContext(rel, lines, lineIndex, spec.rule, fence[lineIndex]);
