@@ -71,6 +71,8 @@ function matchesQuery(skill, q) {
     skill.linkTarget || "",
     skill.origin?.label || "",
     skill.origin?.url || "",
+    skill.physicality === "broken" ? "broken" : "",
+    skill.physicality === "reference" ? "reference" : "",
     skill.risk && skill.risk !== "none" ? `risk ${skill.risk}` : "",
     skill.copyCount ? `copy copies ${skill.copyCount}` : "",
     skill.quarantined ? "quarantine held" : "",
@@ -204,9 +206,10 @@ function copyStamp(copies, copyCount) {
 function formStamps(skill, { origin = "attested" } = {}) {
   const marks = [];
   if (skill.link) {
+    const broken = skill.physicality === "broken";
     marks.push(
-      <span key="link" data-form="link">
-        symlink
+      <span key="link" data-form={broken ? "broken" : "reference"}>
+        {broken ? "broken" : "virtual reference"}
       </span>,
     );
   }
@@ -374,7 +377,16 @@ export default function App() {
 
   const skills = catalog?.skills ?? [];
   const scopes = catalog?.scopes ?? [];
-  const census = catalog?.census || { total: skills.length, unique: 0, duplicates: 0 };
+  const census = catalog?.census || {
+    total: skills.length,
+    physical: skills.length,
+    unique: 0,
+    duplicateCopies: 0,
+    duplicateBytes: 0,
+    references: 0,
+    broken: 0,
+    duplicates: 0,
+  };
   const quarantinePath = catalog?.quarantineRoot || "the quarantine";
   const inQuarantine = scopeId === "quarantine";
   const linked = useMemo(
@@ -643,13 +655,25 @@ export default function App() {
               <span>in house</span>
             </p>
             <p>
-              <b>{loading ? "…" : census.unique}</b>
-              <span>unique</span>
+              <b>{loading ? "…" : census.physical}</b>
+              <span>physical</span>
+              {census.duplicateCopies ? (
+                <small>
+                  {census.duplicateCopies} copies ·{" "}
+                  {formatBytes(census.duplicateBytes)}
+                </small>
+              ) : null}
             </p>
             <p>
-              <b>{loading ? "…" : census.duplicates}</b>
-              <span>duplicates</span>
+              <b>{loading ? "…" : census.references}</b>
+              <span>references</span>
             </p>
+            {census.broken ? (
+              <p>
+                <b>{loading ? "…" : census.broken}</b>
+                <span>broken</span>
+              </p>
+            ) : null}
           </div>
           <button type="button" className="reshelve" onClick={() => load(true)}>
             Reshelve
@@ -1009,7 +1033,13 @@ function SkillLeaf({
           <dl>
             <div>
               <dt>form</dt>
-              <dd>{selected.file ? "file" : "folder"}</dd>
+              <dd>
+                {selected.physicality === "broken"
+                  ? "broken link"
+                  : selected.file
+                    ? "file"
+                    : "folder"}
+              </dd>
             </div>
             <div>
               <dt>invocation</dt>
@@ -1028,10 +1058,23 @@ function SkillLeaf({
                 <dd>{detail.quarantinedFrom}</dd>
               </div>
             ) : null}
-            {selected.link ? (
+            {selected.link && selected.physicality !== "broken" ? (
               <div>
                 <dt>symlink</dt>
                 <dd>{selected.linkTarget || "yes"}</dd>
+              </div>
+            ) : null}
+            {selected.physicality === "reference" ? (
+              <div>
+                <dt>points to</dt>
+                <dd>
+                  <code title={selected.refTarget}>{selected.refTarget}</code>
+                  {selected.refSkillId ? null : (
+                    <span data-origin-certainty="inferred">
+                      outside the cabinet
+                    </span>
+                  )}
+                </dd>
               </div>
             ) : null}
             {selected.origin ? (

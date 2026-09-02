@@ -301,6 +301,13 @@ h3 {
   color: var(--ink-soft);
 }
 
+.census small {
+  grid-column: 1 / -1;
+  font-family: var(--chrome);
+  font-size: 0.62rem;
+  color: var(--ink-soft);
+}
+
 .reshelve {
   flex-shrink: 0;
   margin: 0;
@@ -654,6 +661,11 @@ h3 {
 .meta [data-form],
 .stamps [data-form] {
   color: var(--brass);
+}
+
+.meta [data-form="broken"],
+.stamps [data-form="broken"] {
+  color: var(--stamp);
 }
 
 .meta a[data-origin],
