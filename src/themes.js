@@ -109,3 +109,40 @@ export function matchesRiskFilter(skill, filter) {
   if (filter === "hide") return !elevated;
   return true;
 }
+
+export const INVOCATION_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "user", label: "User only" },
+  { id: "model", label: "Model" },
+  { id: "hook", label: "Hook" },
+  { id: "off", label: "Off" },
+];
+
+const INVOCATION_KEY = "skill-cabinet-invocation";
+const INVOCATION_KEY_LEGACY = "skill-cabinet-when";
+const INVOCATION_IDS = new Set(INVOCATION_FILTERS.map((t) => t.id));
+
+export function readStoredInvocationFilter() {
+  try {
+    const stored =
+      localStorage.getItem(INVOCATION_KEY) ||
+      localStorage.getItem(INVOCATION_KEY_LEGACY);
+    if (stored && INVOCATION_IDS.has(stored)) return stored;
+  } catch {
+    /* private mode */
+  }
+  return "all";
+}
+
+export function writeStoredInvocationFilter(id) {
+  try {
+    localStorage.setItem(INVOCATION_KEY, id);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function matchesInvocationFilter(skill, filter) {
+  if (filter === "all") return true;
+  return (skill.invocation || "model") === filter;
+}
