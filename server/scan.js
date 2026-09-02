@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import YAML from "yaml";
+import { auditSkill } from "./audit.js";
+import { deleteEffect } from "./delete-effect.js";
+import { skillInvocation } from "./invocation.js";
+
+export { deleteEffect };
 
 const HOME = os.homedir();
 
@@ -451,6 +456,17 @@ function collectDirectSkills(root, list) {
     if (SKIP_WALK.has(entry.name)) continue;
     const abs = path.resolve(path.join(root.root, entry.name));
     const install = describeInstall(abs);
+    if (install.link && !install.file && !isDir(abs)) {
+      list.push({
+        dir: abs,
+        skillMd: abs,
+        root,
+        ...install,
+        file: false,
+        dangling: true,
+      });
+      continue;
+    }
     if (isDir(abs)) {
       const skillMd = findSkillFile(abs);
       if (skillMd) {
@@ -522,10 +538,9 @@ function dirSizeAndFiles(dir) {
       if (SKIP_WALK.has(entry.name)) continue;
       const abs = path.join(current, entry.name);
       const nextRel = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        if (entry.isDirectory() || (entry.isSymbolicLink() && isDir(abs))) {
-          walk(abs, nextRel, depth + 1);
-        }
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        walk(abs, nextRel, depth + 1);
       } else if (entry.isFile()) {
         let size = 0;
         let mtime = 0;
@@ -546,16 +561,59 @@ function dirSizeAndFiles(dir) {
   return { files, bytes };
 }
 
+function danglingSummary(item) {
+  const { dir, root } = item;
+  let mtime = 0;
+  try {
+    mtime = fs.lstatSync(dir).mtimeMs;
+  } catch {
+    /* gone */
+  }
+  const base = path.basename(dir);
+  const slug = base.replace(/\.md$/i, "");
+  return {
+    id: idFor(dir),
+    name: slug,
+    slug,
+    description: "",
+    frontmatter: {},
+    scopeId: root.scopeId,
+    scopeLabel: root.scopeLabel,
+    kind: kindFor(root),
+    path: dir,
+    skillFile: dir,
+    skillRel: path.basename(dir),
+    file: false,
+    link: true,
+    linkTarget: item.linkTarget || "",
+    origin: null,
+    invocation: "model",
+    invocationEvidence: "",
+    contentHash: null,
+    risk: "none",
+    findings: [],
+    copies: [],
+    mtime,
+    skillSize: 0,
+    physicality: "broken",
+    refTarget: "",
+    refSkillId: "",
+  };
+}
+
 function summarizeSkill(item) {
   const { dir, skillMd, root } = item;
+  if (item.dangling) return danglingSummary(item);
   let text = "";
   let mtime = 0;
   let size = 0;
+  let raw;
   try {
     const st = fs.statSync(skillMd);
     mtime = st.mtimeMs;
     size = st.size;
-    text = fs.readFileSync(skillMd, "utf8");
+    raw = fs.readFileSync(skillMd);
+    text = raw.toString("utf8");
   } catch {
     return null;
   }
@@ -568,6 +626,18 @@ function summarizeSkill(item) {
     slug;
   const description =
     typeof data.description === "string" ? data.description : "";
+  const audited = auditSkill({
+    root: dir,
+    skillFile: skillMd,
+    text,
+    fileOnly: Boolean(item.file),
+  });
+  const when = skillInvocation({
+    skillDir: dir,
+    fileOnly: Boolean(item.file),
+    frontmatter: data,
+    description,
+  });
 
   return {
     id: idFor(dir),
@@ -585,14 +655,48 @@ function summarizeSkill(item) {
     link: Boolean(item.link),
     linkTarget: item.linkTarget || "",
     origin: inferOrigin(dir, data, item.linkTarget),
+    invocation: when.invocation,
+    invocationEvidence: when.invocationEvidence,
+    contentHash: crypto.createHash("sha256").update(raw).digest("hex"),
+    risk: audited.severity,
+    findings: audited.findings,
+    copies: [],
     mtime,
     skillSize: size,
+    physicality: item.link ? "reference" : "physical",
+    refTarget: item.link ? real(dir) : "",
+    refSkillId: "",
   };
 }
 
-export function scanSkills() {
+export function attachCopies(skills) {
+  const byHash = new Map();
+  for (const skill of skills) {
+    if (skill.physicality !== "physical") continue;
+    if (!skill.contentHash) continue;
+    const list = byHash.get(skill.contentHash) || [];
+    list.push(skill);
+    byHash.set(skill.contentHash, list);
+  }
+  for (const skill of skills) {
+    if (skill.physicality !== "physical") {
+      skill.copies = [];
+      continue;
+    }
+    const group = byHash.get(skill.contentHash) || [];
+    skill.copies = group
+      .filter((other) => other.id !== skill.id)
+      .map((other) => ({
+        id: other.id,
+        scopeLabel: other.scopeLabel,
+        path: other.path,
+      }));
+  }
+  return skills;
+}
+
+export function scanRoots(roots) {
   originCache = new Map();
-  const roots = discoverRoots();
   const found = [];
   for (const root of roots) {
     if (root.recursive) {
@@ -616,16 +720,82 @@ export function scanSkills() {
     byId.set(summary.id, summary);
   }
 
+  const byReal = new Map();
+  for (const skill of skills) {
+    if (skill.physicality === "physical") byReal.set(real(skill.path), skill.id);
+  }
+  for (const skill of skills) {
+    if (skill.physicality === "reference") {
+      skill.refSkillId = byReal.get(skill.refTarget) || "";
+    }
+  }
+
+  attachCopies(skills);
+
   skills.sort((a, b) => {
     const scope = a.scopeLabel.localeCompare(b.scopeLabel);
     if (scope !== 0) return scope;
     return a.name.localeCompare(b.name);
   });
 
-  return { roots, skills, byId };
+  return { roots, skills, byId, census: censusOf(skills) };
+}
+
+export function scanSkills() {
+  return scanRoots(discoverRoots());
+}
+
+function censusOf(skills) {
+  const physical = skills.filter((skill) => skill.physicality === "physical");
+  const hashes = new Set();
+  for (const skill of physical) {
+    if (skill.contentHash) hashes.add(skill.contentHash);
+  }
+  return {
+    total: skills.length,
+    unique: hashes.size,
+    duplicates: Math.max(0, physical.length - hashes.size),
+  };
+}
+
+export function toCatalogSkill(skill) {
+  return {
+    id: skill.id,
+    name: skill.name,
+    slug: skill.slug,
+    description: skill.description,
+    scopeId: skill.scopeId,
+    scopeLabel: skill.scopeLabel,
+    kind: skill.kind,
+    path: skill.path,
+    skillRel: skill.skillRel,
+    file: skill.file,
+    link: skill.link,
+    linkTarget: skill.linkTarget,
+    origin: skill.origin,
+    invocation: skill.invocation,
+    invocationEvidence: skill.invocationEvidence,
+    risk: skill.risk,
+    physicality: skill.physicality,
+    refTarget: skill.refTarget,
+    refSkillId: skill.refSkillId,
+    copyCount: skill.copies.length,
+    mtime: skill.mtime,
+  };
 }
 
 export function readSkill(summary) {
+  if (summary.physicality === "broken") {
+    return {
+      ...summary,
+      frontmatter: {},
+      frontmatterRaw: "",
+      body: "",
+      source: "",
+      files: [],
+      bytes: 0,
+    };
+  }
   const text = fs.readFileSync(summary.skillFile, "utf8");
   const { data, content, raw } = parseFrontmatter(text);
   const { files, bytes } = dirSizeAndFiles(summary.path);
@@ -703,9 +873,10 @@ export function assertDeletable(summary, roots) {
     throw err;
   }
   const install = describeInstall(target);
+  const isDeadLink = install.link && !install.file && !isDir(target);
   const isFolderSkill = isDir(target) && findSkillFile(target);
   const isFileSkill = install.file && isSkillFileName(path.basename(target));
-  if (!isFolderSkill && !isFileSkill) {
+  if (!isDeadLink && !isFolderSkill && !isFileSkill) {
     const err = new Error("Not a skill path");
     err.status = 400;
     throw err;

@@ -70,3 +70,76 @@ export function matchesLinkFilter(skill, filter) {
   if (filter === "hide") return !skill.link;
   return true;
 }
+
+export const RISK_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "elevated", label: "Elevated" },
+  { id: "hide", label: "Hide" },
+];
+
+const RISK_KEY = "skill-cabinet-risk";
+const RISK_IDS = new Set(RISK_FILTERS.map((t) => t.id));
+const ELEVATED_RISK = new Set(["high", "critical"]);
+
+export function isElevatedRisk(risk) {
+  return ELEVATED_RISK.has(risk);
+}
+
+export function readStoredRiskFilter() {
+  try {
+    const value = localStorage.getItem(RISK_KEY);
+    if (value && RISK_IDS.has(value)) return value;
+  } catch {
+    /* private mode */
+  }
+  return "all";
+}
+
+export function writeStoredRiskFilter(id) {
+  try {
+    localStorage.setItem(RISK_KEY, id);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function matchesRiskFilter(skill, filter) {
+  const elevated = isElevatedRisk(skill.risk);
+  if (filter === "elevated") return elevated;
+  if (filter === "hide") return !elevated;
+  return true;
+}
+
+export const WHEN_FILTERS = [
+  { id: "all", label: "All" },
+  { id: "user", label: "User only" },
+  { id: "model", label: "Model" },
+  { id: "hook", label: "Hook" },
+  { id: "off", label: "Off" },
+];
+
+const WHEN_KEY = "skill-cabinet-when";
+const WHEN_IDS = new Set(WHEN_FILTERS.map((t) => t.id));
+
+export function readStoredWhenFilter() {
+  try {
+    const value = localStorage.getItem(WHEN_KEY);
+    if (value && WHEN_IDS.has(value)) return value;
+  } catch {
+    /* private mode */
+  }
+  return "all";
+}
+
+export function writeStoredWhenFilter(id) {
+  try {
+    localStorage.setItem(WHEN_KEY, id);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function matchesWhenFilter(skill, filter) {
+  if (filter === "all") return true;
+  return (skill.invocation || "model") === filter;
+}

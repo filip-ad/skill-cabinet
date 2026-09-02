@@ -1,66 +1,62 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { app, isLoopbackOrigin } from "./index.js";
 
-const summary = { id: "skill-a", name: "Skill A", path: "/fake/skill-a" };
-
-vi.mock("./scan.js", () => ({
-  scanSkills: vi.fn(() => ({
-    roots: [{ root: "/fake" }],
-    skills: [summary],
-    byId: new Map([[summary.id, summary]]),
-  })),
-  readSkill: vi.fn(),
-  readSkillFile: vi.fn(),
-  assertDeletable: vi.fn((s) => s.path),
-  deleteSkillDir: vi.fn(),
-}));
-
-const { app } = await import("./index.js");
-
-describe("POST /api/skills/delete", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+function listen() {
+  return new Promise((resolve) => {
+    const server = app.listen(0, "127.0.0.1", () => resolve(server));
   });
+}
 
-  it("rejects requests with no Origin header", async () => {
-    const res = await request(app)
-      .post("/api/skills/delete")
-      .send({ ids: [summary.id] });
-    expect(res.status).toBe(403);
-  });
-
-  it("rejects requests from a non-loopback Origin", async () => {
-    const res = await request(app)
-      .post("/api/skills/delete")
-      .set("Origin", "http://evil.com")
-      .send({ ids: [summary.id] });
-    expect(res.status).toBe(403);
-  });
-
-  it("accepts requests from the Vite dev-proxy origin (different port, loopback host)", async () => {
-    const res = await request(app)
-      .post("/api/skills/delete")
-      .set("Origin", "http://127.0.0.1:5173")
-      .send({ ids: [summary.id] });
-    expect(res.status).toBe(200);
-    expect(res.body.deleted).toHaveLength(1);
-  });
-
-  it("accepts requests from the same-port prod origin", async () => {
-    const res = await request(app)
-      .post("/api/skills/delete")
-      .set("Origin", "http://127.0.0.1:3781")
-      .send({ ids: [summary.id] });
-    expect(res.status).toBe(200);
-    expect(res.body.deleted).toHaveLength(1);
-  });
+test("isLoopbackOrigin accepts 127.0.0.1, localhost, and ::1 at any port", () => {
+  assert.equal(isLoopbackOrigin("http://127.0.0.1:5173"), true);
+  assert.equal(isLoopbackOrigin("http://127.0.0.1:3781"), true);
+  assert.equal(isLoopbackOrigin("http://localhost:3781"), true);
+  assert.equal(isLoopbackOrigin("http://[::1]:3781"), true);
 });
 
-describe("DELETE /api/skills/:id", () => {
-  it("no longer exists as a route (deletion only via the batch endpoint)", async () => {
-    const res = await request(app)
-      .delete(`/api/skills/${summary.id}`)
-      .set("Origin", "http://127.0.0.1:3781");
-    expect(res.status).toBe(404);
-  });
+test("isLoopbackOrigin rejects other hosts and missing/invalid origins", () => {
+  assert.equal(isLoopbackOrigin("http://evil.com"), false);
+  assert.equal(isLoopbackOrigin(undefined), false);
+  assert.equal(isLoopbackOrigin("not a url"), false);
+});
+
+test("POST /api/skills/delete only accepts a loopback Origin", async () => {
+  const server = await listen();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const post = (origin) =>
+      fetch(`${base}/api/skills/delete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(origin ? { Origin: origin } : {}),
+        },
+        body: JSON.stringify({ ids: ["nope"] }),
+      });
+
+    assert.equal((await post(undefined)).status, 403);
+    assert.equal((await post("http://evil.com")).status, 403);
+
+    const sameOrigin = await post(base);
+    assert.equal(sameOrigin.status, 200);
+    const body = await sameOrigin.json();
+    assert.equal(body.errors[0].error, "Skill not in the cabinet");
+  } finally {
+    server.close();
+  }
+});
+
+test("DELETE /api/skills/:id has no route", async () => {
+  const server = await listen();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const res = await fetch(`${base}/api/skills/nope`, {
+      method: "DELETE",
+      headers: { Origin: base },
+    });
+    assert.equal(res.status, 404);
+  } finally {
+    server.close();
+  }
 });

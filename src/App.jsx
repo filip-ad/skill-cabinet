@@ -11,14 +11,23 @@ import {
 import Logo from "./Logo.jsx";
 import {
   LINK_FILTERS,
+  RISK_FILTERS,
+  WHEN_FILTERS,
   THEMES,
   applyTheme,
   matchesLinkFilter,
+  matchesRiskFilter,
+  matchesWhenFilter,
   readStoredLinkFilter,
+  readStoredRiskFilter,
+  readStoredWhenFilter,
   readStoredTheme,
   writeStoredLinkFilter,
+  writeStoredRiskFilter,
+  writeStoredWhenFilter,
   writeStoredTheme,
 } from "./themes.js";
+import { deleteEffect } from "../server/delete-effect.js";
 
 function formatBytes(n) {
   if (!n) return "0 B";
@@ -59,7 +68,16 @@ function matchesQuery(skill, q) {
     skill.linkTarget || "",
     skill.origin?.label || "",
     skill.origin?.url || "",
-    JSON.stringify(skill.frontmatter || {}),
+    skill.risk && skill.risk !== "none" ? `risk ${skill.risk}` : "",
+    skill.copyCount ? `copy copies ${skill.copyCount}` : "",
+    skill.invocation === "hook"
+      ? "hook every request"
+      : skill.invocation === "user"
+        ? "user only"
+        : skill.invocation === "off"
+          ? "off disabled"
+          : "model may call",
+    skill.invocationEvidence || "",
   ]
     .join("\n")
     .toLowerCase();
@@ -112,6 +130,25 @@ function OriginLink({ origin }) {
   );
 }
 
+function riskStamp(risk) {
+  if (risk === "critical" || risk === "high") return "high risk";
+  if (risk === "medium" || risk === "low") return "risk";
+  return "";
+}
+
+function invokeStamp(mode) {
+  if (mode === "hook") return "hook";
+  if (mode === "user") return "user only";
+  if (mode === "off") return "off";
+  return "";
+}
+
+function copyStamp(copies, copyCount) {
+  const n = copyCount ?? copies?.length ?? 0;
+  if (!n) return "";
+  return n === 1 ? "1 copy" : `${n} copies`;
+}
+
 function formStamps(skill, { origin = "attested" } = {}) {
   const marks = [];
   if (skill.link) {
@@ -125,6 +162,30 @@ function formStamps(skill, { origin = "attested" } = {}) {
     marks.push(
       <span key="file" data-form="file">
         file
+      </span>,
+    );
+  }
+  const copies = copyStamp(skill.copies, skill.copyCount);
+  if (copies) {
+    marks.push(
+      <span key="copies" data-copies="">
+        {copies}
+      </span>,
+    );
+  }
+  const risk = riskStamp(skill.risk);
+  if (risk) {
+    marks.push(
+      <span key="risk" data-risk={skill.risk}>
+        {risk}
+      </span>,
+    );
+  }
+  const when = invokeStamp(skill.invocation);
+  if (when) {
+    marks.push(
+      <span key="when" data-invoke={skill.invocation} title={skill.invocationEvidence || ""}>
+        {when}
       </span>,
     );
   }
@@ -162,7 +223,7 @@ function ThemeSelect() {
 
 function LinkFilterSelect({ value, onChange }) {
   return (
-    <label className="theme-select link-filter">
+    <label className="tray-filter">
       <span>Symlinks</span>
       <select
         value={value}
@@ -170,6 +231,44 @@ function LinkFilterSelect({ value, onChange }) {
         aria-label="Symlink filter"
       >
         {LINK_FILTERS.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function RiskFilterSelect({ value, onChange }) {
+  return (
+    <label className="tray-filter">
+      <span>Risk</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label="Risk filter"
+      >
+        {RISK_FILTERS.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function WhenFilterSelect({ value, onChange }) {
+  return (
+    <label className="tray-filter">
+      <span>When</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label="When the skill runs"
+      >
+        {WHEN_FILTERS.map((item) => (
           <option key={item.id} value={item.id}>
             {item.label}
           </option>
@@ -195,8 +294,11 @@ export default function App() {
   const [slip, setSlip] = useState(null);
   const [busy, setBusy] = useState(false);
   const [linkFilter, setLinkFilter] = useState(readStoredLinkFilter);
+  const [riskFilter, setRiskFilter] = useState(readStoredRiskFilter);
+  const [whenFilter, setWhenFilter] = useState(readStoredWhenFilter);
   const searchRef = useRef(null);
   const listRef = useRef(null);
+  const markAllRef = useRef(null);
   const readerRef = useRef(null);
 
   async function load(refresh = false) {
@@ -218,9 +320,16 @@ export default function App() {
 
   const skills = catalog?.skills ?? [];
   const scopes = catalog?.scopes ?? [];
+  const census = catalog?.census || { total: skills.length, unique: 0, duplicates: 0 };
   const linked = useMemo(
-    () => skills.filter((s) => matchesLinkFilter(s, linkFilter)),
-    [skills, linkFilter],
+    () =>
+      skills.filter(
+        (s) =>
+          matchesLinkFilter(s, linkFilter) &&
+          matchesRiskFilter(s, riskFilter) &&
+          matchesWhenFilter(s, whenFilter),
+      ),
+    [skills, linkFilter, riskFilter, whenFilter],
   );
 
   const visible = useMemo(() => {
@@ -230,6 +339,17 @@ export default function App() {
       return matchesQuery(s, q);
     });
   }, [linked, scopeId, query]);
+
+  const markedCount = checked.size;
+  const allVisibleMarked =
+    visible.length > 0 && visible.every((s) => checked.has(s.id));
+
+  useEffect(() => {
+    const el = markAllRef.current;
+    if (!el) return;
+    const someVisibleMarked = visible.some((s) => checked.has(s.id));
+    el.indeterminate = someVisibleMarked && !allVisibleMarked;
+  }, [visible, checked, allVisibleMarked]);
 
   const scopeCounts = useMemo(() => {
     const by = new Map();
@@ -401,35 +521,47 @@ export default function App() {
   return (
     <div className="desk">
       <header className="masthead">
-        <div className="wordmark">
-          <Logo className="mark" />
-          <div className="wordmark-text">
-            <p className="edition">Local filesystem · user cabinet</p>
-            <h1>Skill Cabinet</h1>
+        <div className="mast-lead">
+          <div className="wordmark">
+            <Logo className="mark" />
+            <div className="wordmark-text">
+              <p className="edition">Local filesystem · user cabinet</p>
+              <h1>Skill Cabinet</h1>
+            </div>
+          </div>
+          <div className="finder">
+            <label>
+              <span>Find</span>
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="name, description, path, origin, frontmatter"
+                type="search"
+                spellCheck="false"
+              />
+            </label>
+            <p className="keys">j k move · / find · x mark · d delete</p>
           </div>
         </div>
-        <div className="finder">
-          <label>
-            <span>Find</span>
-            <input
-              ref={searchRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="name, description, path, frontmatter"
-              type="search"
-              spellCheck="false"
-            />
-          </label>
-          <p className="keys">j k move · / find · x mark · d delete</p>
-        </div>
         <div className="mast-tools">
-          <p className="census">
-            <b>{loading ? "…" : catalog?.total ?? 0}</b>
-            <span>in house</span>
-            <button type="button" className="textish" onClick={() => load(true)}>
-              Reshelve
-            </button>
-          </p>
+          <div className="census">
+            <p>
+              <b>{loading ? "…" : census.total}</b>
+              <span>in house</span>
+            </p>
+            <p>
+              <b>{loading ? "…" : census.unique}</b>
+              <span>unique</span>
+            </p>
+            <p>
+              <b>{loading ? "…" : census.duplicates}</b>
+              <span>duplicates</span>
+            </p>
+          </div>
+          <button type="button" className="reshelve" onClick={() => load(true)}>
+            Reshelve
+          </button>
           <ThemeSelect />
         </div>
       </header>
@@ -476,34 +608,48 @@ export default function App() {
           <div className="tray-head">
             <label className="check">
               <input
+                ref={markAllRef}
                 type="checkbox"
-                checked={
-                  visible.length > 0 && visible.every((s) => checked.has(s.id))
-                }
+                checked={allVisibleMarked}
                 onChange={toggleVisible}
+                aria-label="Mark all shown cards"
               />
               <span>
-                {visible.length} shown
-                {checked.size ? ` · ${checked.size} marked` : ""}
+                {markedCount ? `${markedCount} marked` : `${visible.length} shown`}
               </span>
             </label>
-            <LinkFilterSelect
-              value={linkFilter}
-              onChange={(next) => {
-                writeStoredLinkFilter(next);
-                setLinkFilter(next);
-              }}
-            />
-            <button
-              type="button"
-              className="stamp"
-              disabled={!checked.size && !selectedId}
-              onClick={() =>
-                openSlip(checked.size ? [...checked] : selectedId ? [selectedId] : [])
-              }
-            >
-              Delete
-            </button>
+            {markedCount > 0 ? (
+              <button
+                type="button"
+                className="stamp"
+                onClick={() => openSlip([...checked])}
+              >
+                Delete
+              </button>
+            ) : null}
+            <div className="tray-filters">
+              <LinkFilterSelect
+                value={linkFilter}
+                onChange={(next) => {
+                  writeStoredLinkFilter(next);
+                  setLinkFilter(next);
+                }}
+              />
+              <RiskFilterSelect
+                value={riskFilter}
+                onChange={(next) => {
+                  writeStoredRiskFilter(next);
+                  setRiskFilter(next);
+                }}
+              />
+              <WhenFilterSelect
+                value={whenFilter}
+                onChange={(next) => {
+                  writeStoredWhenFilter(next);
+                  setWhenFilter(next);
+                }}
+              />
+            </div>
           </div>
           <ol ref={listRef} className="cards">
             {visible.map((skill) => (
@@ -569,6 +715,10 @@ export default function App() {
               view={view}
               setView={setView}
               onOpenFile={openFile}
+              onSelectCopy={(id) => {
+                setSlip(null);
+                setSelectedId(id);
+              }}
               onDelete={() => openSlip([selected.id])}
             />
           )}
@@ -594,6 +744,7 @@ function EmptyReader({ loading }) {
 
 function DeleteConfirm({ slip, busy, onCancel, onConfirm }) {
   const builtin = slip.cards.filter((c) => c.kind !== "user");
+  const unlinkCount = slip.cards.filter((c) => c.link).length;
   return (
     <div className="leaf slip">
       <p className="edition">Delete</p>
@@ -602,8 +753,13 @@ function DeleteConfirm({ slip, busy, onCancel, onConfirm }) {
         {slip.cards.length === 1 ? "" : "s"} from disk
       </h2>
       <p className="warning">
-        This deletes the skill from the local filesystem. There is no undo.
+        There is no undo. Each card names its filesystem effect below.
       </p>
+      {unlinkCount > 0 && (
+        <p className="warning">
+          Unlink removes the link only. The target stays.
+        </p>
+      )}
       {builtin.length > 0 && (
         <p className="warning">
           {builtin.length} of these live in a plugin cache or builtin drawer and
@@ -611,12 +767,19 @@ function DeleteConfirm({ slip, busy, onCancel, onConfirm }) {
         </p>
       )}
       <ol className="slip-list">
-        {slip.cards.map((card) => (
-          <li key={card.id}>
-            <strong>{card.name}</strong>
-            <code>{card.path}</code>
-          </li>
-        ))}
+        {slip.cards.map((card) => {
+          const effect = deleteEffect(card);
+          return (
+            <li key={card.id}>
+              <strong>{card.name}</strong>
+              <span className="effect">
+                {effect.label}
+              </span>
+              <code title={effect.path}>{effect.path}</code>
+              {effect.note ? <small>{effect.note}</small> : null}
+            </li>
+          );
+        })}
       </ol>
       <div className="slip-actions">
         <button type="button" className="textish" onClick={onCancel} disabled={busy}>
@@ -643,13 +806,24 @@ function SkillLeaf({
   view,
   setView,
   onOpenFile,
+  onSelectCopy,
   onDelete,
 }) {
   const fm = detail?.frontmatter || selected.frontmatter || {};
   const keys = Object.keys(fm);
   const files = detail?.files || [];
+  const copies = (detail?.copies?.length ? detail.copies : selected.copies) || [];
+  const findings = detail?.findings || selected.findings || [];
   const skillRel = selected.skillRel || "SKILL.md";
-  const showDisk = selected.file || selected.link || selected.origin;
+  const showDisk = true;
+  const whenLabel =
+    selected.invocation === "hook"
+      ? "hook"
+      : selected.invocation === "user"
+        ? "user only"
+        : selected.invocation === "off"
+          ? "off"
+          : "model may call";
   const body = preview
     ? preview.binary
       ? `Binary file · ${formatBytes(preview.size)}`
@@ -664,7 +838,9 @@ function SkillLeaf({
         <div className="leaf-ident">
           <p className="call">{callNumber(selected)}</p>
           <h2>{selected.name}</h2>
-          <p className="path">{selected.path}</p>
+          <p className="path" title={selected.path}>
+            {selected.path}
+          </p>
           <p className="stamps">
             <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
             {formStamps(selected, { origin: "all" })}
@@ -709,6 +885,17 @@ function SkillLeaf({
               <dt>form</dt>
               <dd>{selected.file ? "file" : "folder"}</dd>
             </div>
+            <div>
+              <dt>when</dt>
+              <dd>
+                {whenLabel}
+                {selected.invocationEvidence ? (
+                  <code title={selected.invocationEvidence}>
+                    {selected.invocationEvidence}
+                  </code>
+                ) : null}
+              </dd>
+            </div>
             {selected.link ? (
               <div>
                 <dt>symlink</dt>
@@ -723,6 +910,45 @@ function SkillLeaf({
                 </dd>
               </div>
             ) : null}
+            {copies.length > 0 ? (
+              <div>
+                <dt>copies</dt>
+                <dd>
+                  <ul className="copy-list">
+                    {copies.map((copy) => (
+                      <li key={copy.id}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectCopy(copy.id)}
+                        >
+                          {copy.scopeLabel}
+                        </button>
+                        <code title={copy.path}>{copy.path}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        </section>
+      )}
+
+      {findings.length > 0 && (
+        <section className="catalogue">
+          <h3>Risk</h3>
+          <dl>
+            {findings.map((item, index) => (
+              <div key={`${item.rule}-${item.file}-${item.line}-${index}`}>
+                <dt data-risk={item.severity}>{item.severity}</dt>
+                <dd>
+                  {item.message}
+                  <code title={`${item.file}:${item.line}`}>
+                    {item.file}:{item.line} · {item.rule}
+                  </code>
+                </dd>
+              </div>
+            ))}
           </dl>
         </section>
       )}
