@@ -37,7 +37,8 @@ Requires Node 20+.
 - Read the skill body (rendered or source), YAML frontmatter, and extra files
 - See whether a skill is a folder, a file, or a symlink
 - Follow a GitHub origin when the skill names it, or when the install path encodes it. Origins taken from a parent plugin or git remote are marked inferred.
-- Notice identical copies across drawers, and static risk in the skill body
+- Notice identical copies across drawers, virtual references, and broken links, and static risk in the skill body
+- Read the house census: what occupies disk, what merely points at it, and the bytes the duplicates occupy
 - Delete one skill or several at once. A symlink is unlinked; its target stays.
 
 **Delete** removes the skill from disk (folder, file, or link). There is no undo. Builtin Cursor skills and plugin-cache copies may come back the next time that tool updates.
