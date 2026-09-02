@@ -26,6 +26,17 @@ test("deleteEffect names unlink, file, and folder", () => {
   assert.equal(deleteEffect({ path: "/tmp/folder" }).action, "delete-folder");
 });
 
+test("a dead shortcut unlinks and says the target is gone", () => {
+  const effect = deleteEffect({
+    link: true,
+    path: "/tmp/dead",
+    linkTarget: "/tmp/gone",
+    physicality: "broken",
+  });
+  assert.equal(effect.action, "unlink");
+  assert.equal(effect.note, "The target is already gone");
+});
+
 test("unlinking a symlink keeps the target folder", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-cabinet-del-"));
   try {
