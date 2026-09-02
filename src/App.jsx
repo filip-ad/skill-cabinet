@@ -667,6 +667,7 @@ export default function App() {
           {slip ? (
             <DeleteConfirm
               slip={slip}
+              skills={skills}
               busy={busy}
               onCancel={() => setSlip(null)}
               onConfirm={confirmDelete}
@@ -709,9 +710,28 @@ function EmptyReader({ loading }) {
   );
 }
 
-function DeleteConfirm({ slip, busy, onCancel, onConfirm }) {
+function DeleteConfirm({ slip, skills, busy, onCancel, onConfirm }) {
   const builtin = slip.cards.filter((c) => c.kind !== "user");
   const unlinkCount = slip.cards.filter((c) => c.link).length;
+  const going = new Set(slip.ids);
+  const hintsFor = (card) => {
+    const hints = [];
+    const remaining = (card.copies || []).filter((c) => !going.has(c.id));
+    if (remaining.length) {
+      hints.push(`A physical copy remains in ${remaining[0].scopeLabel}.`);
+    }
+    const references = skills.filter(
+      (s) => s.refSkillId === card.id && !going.has(s.id),
+    );
+    if (references.length) {
+      hints.push(
+        references.length === 1
+          ? "1 drawer links here; deleting orphans it."
+          : `${references.length} drawers link here; deleting orphans them.`,
+      );
+    }
+    return hints;
+  };
   return (
     <div className="leaf slip">
       <p className="edition">Delete</p>
@@ -743,6 +763,9 @@ function DeleteConfirm({ slip, busy, onCancel, onConfirm }) {
                 {effect.label}
               </span>
               <code title={effect.path}>{effect.path}</code>
+              {hintsFor(card).map((hint) => (
+                <small key={hint}>{hint}</small>
+              ))}
               {effect.note ? <small>{effect.note}</small> : null}
             </li>
           );
