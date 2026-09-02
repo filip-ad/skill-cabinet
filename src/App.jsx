@@ -7,23 +7,30 @@ import {
   fetchSkill,
   fetchSkillFile,
   deleteSkills,
+  quarantineSkills,
+  restoreSkills,
 } from "./api.js";
 import Logo from "./Logo.jsx";
 import {
   LINK_FILTERS,
   RISK_FILTERS,
+  INVOCATION_FILTERS,
   THEMES,
   applyTheme,
   matchesLinkFilter,
   matchesRiskFilter,
+  matchesInvocationFilter,
   readStoredLinkFilter,
   readStoredRiskFilter,
+  readStoredInvocationFilter,
   readStoredTheme,
   writeStoredLinkFilter,
   writeStoredRiskFilter,
+  writeStoredInvocationFilter,
   writeStoredTheme,
 } from "./themes.js";
 import { deleteEffect } from "../server/delete-effect.js";
+import { crossingQuarantineShelf, idsForShelfAction } from "./shelf-actions.js";
 
 function formatBytes(n) {
   if (!n) return "0 B";
@@ -68,6 +75,16 @@ function matchesQuery(skill, q) {
     skill.physicality === "reference" ? "reference" : "",
     skill.risk && skill.risk !== "none" ? `risk ${skill.risk}` : "",
     skill.copyCount ? `copy copies ${skill.copyCount}` : "",
+    skill.quarantined ? "quarantine held" : "",
+    skill.fromScope ? `from ${skill.fromScope}` : "",
+    skill.invocation === "hook"
+      ? "hook every request"
+      : skill.invocation === "user"
+        ? "user only"
+        : skill.invocation === "off"
+          ? "off disabled"
+          : "model may call",
+    skill.invocationEvidence || "",
   ]
     .join("\n")
     .toLowerCase();
@@ -86,8 +103,55 @@ function stringifyValue(value) {
 function kindStamp(kind) {
   if (kind === "builtin") return "builtin";
   if (kind === "plugin") return "plugin cache";
+  if (kind === "quarantine") return "quarantine";
   return "user";
 }
+
+const ACTIONS = {
+  delete: {
+    label: "Delete",
+    edition: "Delete",
+    run: deleteSkills,
+    key: "deleted",
+    destructive: true,
+    heading: (n) => `Delete ${n} card${n === 1 ? "" : "s"} from disk`,
+    note: () => "There is no undo. Each card names its filesystem effect below.",
+    busy: "Deleting…",
+    done: (n) => `Deleted ${n} card${n === 1 ? "" : "s"} from disk.`,
+    none: "Nothing was deleted.",
+  },
+  quarantine: {
+    label: "Quarantine",
+    edition: "Quarantine",
+    run: quarantineSkills,
+    key: "quarantined",
+    destructive: false,
+    heading: (n) =>
+      `Quarantine ${n} card${n === 1 ? "" : "s"} out of the drawers`,
+    note: (where) => (
+      <>
+        The cards move to <code>{where}</code>. No agent reads that folder.
+        Restore puts them back where they came from.
+      </>
+    ),
+    busy: "Quarantining…",
+    done: (n) => `Quarantined ${n} card${n === 1 ? "" : "s"}.`,
+    none: "Nothing was quarantined.",
+  },
+  restore: {
+    label: "Restore",
+    edition: "Restore",
+    run: restoreSkills,
+    key: "restored",
+    destructive: false,
+    heading: (n) => `Restore ${n} card${n === 1 ? "" : "s"} to their drawers`,
+    note: () =>
+      "Each card goes back to the path it was filed from. A card whose path is already taken stays in the quarantine.",
+    busy: "Restoring…",
+    done: (n) => `Restored ${n} card${n === 1 ? "" : "s"}.`,
+    none: "Nothing was restored.",
+  },
+};
 
 function originTitle(origin) {
   if (origin.certainty === "inferred") {
@@ -123,6 +187,13 @@ function OriginLink({ origin }) {
 function riskStamp(risk) {
   if (risk === "critical" || risk === "high") return "high risk";
   if (risk === "medium" || risk === "low") return "risk";
+  return "";
+}
+
+function invokeStamp(mode) {
+  if (mode === "hook") return "hook";
+  if (mode === "user") return "user only";
+  if (mode === "off") return "off";
   return "";
 }
 
@@ -162,6 +233,14 @@ function formStamps(skill, { origin = "attested" } = {}) {
     marks.push(
       <span key="risk" data-risk={skill.risk}>
         {risk}
+      </span>,
+    );
+  }
+  const invoke = invokeStamp(skill.invocation);
+  if (invoke) {
+    marks.push(
+      <span key="invoke" data-invoke={skill.invocation} title={skill.invocationEvidence || ""}>
+        {invoke}
       </span>,
     );
   }
@@ -235,6 +314,25 @@ function RiskFilterSelect({ value, onChange }) {
   );
 }
 
+function InvocationFilterSelect({ value, onChange }) {
+  return (
+    <label className="tray-filter">
+      <span>Invocation</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label="How the skill is invoked"
+      >
+        {INVOCATION_FILTERS.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export default function App() {
   const [catalog, setCatalog] = useState(null);
   const [error, setError] = useState("");
@@ -252,6 +350,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [linkFilter, setLinkFilter] = useState(readStoredLinkFilter);
   const [riskFilter, setRiskFilter] = useState(readStoredRiskFilter);
+  const [invocationFilter, setInvocationFilter] = useState(
+    readStoredInvocationFilter,
+  );
   const searchRef = useRef(null);
   const listRef = useRef(null);
   const markAllRef = useRef(null);
@@ -286,23 +387,47 @@ export default function App() {
     broken: 0,
     duplicates: 0,
   };
+  const quarantinePath = catalog?.quarantineRoot || "the quarantine";
+  const inQuarantine = scopeId === "quarantine";
   const linked = useMemo(
     () =>
       skills.filter(
-        (s) => matchesLinkFilter(s, linkFilter) && matchesRiskFilter(s, riskFilter),
+        (s) =>
+          matchesLinkFilter(s, linkFilter) &&
+          matchesRiskFilter(s, riskFilter) &&
+          matchesInvocationFilter(s, invocationFilter),
       ),
-    [skills, linkFilter, riskFilter],
+    [skills, linkFilter, riskFilter, invocationFilter],
+  );
+  const live = useMemo(
+    () => linked.filter((s) => !s.quarantined),
+    [linked],
+  );
+  const quarantined = useMemo(
+    () => linked.filter((s) => s.quarantined),
+    [linked],
+  );
+  const drawerScopes = useMemo(
+    () => scopes.filter((s) => s.id !== "quarantine"),
+    [scopes],
   );
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return linked.filter((s) => {
-      if (scopeId !== "all" && s.scopeId !== scopeId) return false;
+    const pool = inQuarantine ? quarantined : live;
+    return pool.filter((s) => {
+      if (!inQuarantine && scopeId !== "all" && s.scopeId !== scopeId) {
+        return false;
+      }
       return matchesQuery(s, q);
     });
-  }, [linked, scopeId, query]);
+  }, [live, quarantined, inQuarantine, scopeId, query]);
 
-  const markedCount = checked.size;
+  const markedOnShelf = useMemo(
+    () => visible.filter((s) => checked.has(s.id)).map((s) => s.id),
+    [visible, checked],
+  );
+  const markedCount = markedOnShelf.length;
   const allVisibleMarked =
     visible.length > 0 && visible.every((s) => checked.has(s.id));
 
@@ -315,11 +440,11 @@ export default function App() {
 
   const scopeCounts = useMemo(() => {
     const by = new Map();
-    for (const skill of linked) {
+    for (const skill of live) {
       by.set(skill.scopeId, (by.get(skill.scopeId) || 0) + 1);
     }
     return by;
-  }, [linked]);
+  }, [live]);
 
   useEffect(() => {
     if (!visible.length) {
@@ -394,7 +519,15 @@ export default function App() {
       }
       if (e.key === "d" && !slip) {
         e.preventDefault();
-        openSlip(checked.size ? [...checked] : selectedId ? [selectedId] : []);
+        openSlip(marked(), "delete");
+      }
+      if (e.key === "q" && !slip && !inQuarantine) {
+        e.preventDefault();
+        openSlip(marked(), "quarantine");
+      }
+      if (e.key === "r" && !slip && inQuarantine) {
+        e.preventDefault();
+        openSlip(marked(), "restore");
       }
       if (e.key === "Escape" && slip) {
         setSlip(null);
@@ -402,7 +535,18 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [visible, selectedId, checked, slip]);
+  }, [visible, selectedId, checked, slip, inQuarantine, markedOnShelf]);
+
+  function marked() {
+    if (markedOnShelf.length) return markedOnShelf;
+    return selectedId ? [selectedId] : [];
+  }
+
+  function openScope(nextId) {
+    setSlip(null);
+    if (crossingQuarantineShelf(scopeId, nextId)) setChecked(new Set());
+    setScopeId(nextId);
+  }
 
   function toggleChecked(id) {
     setChecked((prev) => {
@@ -424,29 +568,25 @@ export default function App() {
     });
   }
 
-  function openSlip(ids) {
-    if (!ids.length) return;
-    const cards = ids
+  function openSlip(ids, mode) {
+    const actionable = idsForShelfAction(ids, skills, mode);
+    if (!actionable.length) return;
+    const cards = actionable
       .map((id) => skills.find((s) => s.id === id))
       .filter(Boolean);
-    setSlip({
-      ids,
-      cards,
-    });
+    setSlip({ ids: actionable, cards, mode });
   }
 
-  async function confirmDelete() {
+  async function confirmSlip() {
     if (!slip) return;
+    const action = ACTIONS[slip.mode];
     setBusy(true);
     setNotice("");
+    setError("");
     try {
-      const result = await deleteSkills(slip.ids);
-      const n = result.deleted.length;
-      setNotice(
-        n
-          ? `Deleted ${n} card${n === 1 ? "" : "s"} from disk.`
-          : "Nothing was deleted.",
-      );
+      const result = await action.run(slip.ids);
+      const n = result[action.key]?.length ?? 0;
+      setNotice(n ? action.done(n) : action.none);
       if (result.errors?.length) {
         setError(result.errors.map((e) => e.error).join("; "));
       }
@@ -503,7 +643,9 @@ export default function App() {
                 spellCheck="false"
               />
             </label>
-            <p className="keys">j k move · / find · x mark · d delete</p>
+            <p className="keys">
+              j k move · / find · x mark · q quarantine · r restore · d delete
+            </p>
           </div>
         </div>
         <div className="mast-tools">
@@ -552,30 +694,34 @@ export default function App() {
           <button
             type="button"
             className={scopeId === "all" ? "drawer on" : "drawer"}
-            onClick={() => {
-              setSlip(null);
-              setScopeId("all");
-            }}
+            onClick={() => openScope("all")}
           >
             <i />
             <span>All drawers</span>
-            <em>{linked.length}</em>
+            <em>{live.length}</em>
           </button>
-          {scopes.map((scope) => (
+          {drawerScopes.map((scope) => (
             <button
               key={scope.id}
               type="button"
               className={scopeId === scope.id ? "drawer on" : "drawer"}
-              onClick={() => {
-                setSlip(null);
-                setScopeId(scope.id);
-              }}
+              onClick={() => openScope(scope.id)}
             >
               <i data-kind={scope.kind} />
               <span>{scope.label}</span>
               <em>{scopeCounts.get(scope.id) ?? 0}</em>
             </button>
           ))}
+          <button
+            type="button"
+            className={inQuarantine ? "drawer quarantine on" : "drawer quarantine"}
+            onClick={() => openScope("quarantine")}
+            title={`Held out of every drawer an agent reads · ${quarantinePath}`}
+          >
+            <i data-kind="quarantine" />
+            <span>Quarantine</span>
+            <em>{quarantined.length}</em>
+          </button>
         </nav>
 
         <section className="tray" aria-label="Skills">
@@ -593,13 +739,24 @@ export default function App() {
               </span>
             </label>
             {markedCount > 0 ? (
-              <button
-                type="button"
-                className="stamp"
-                onClick={() => openSlip([...checked])}
-              >
-                Delete
-              </button>
+              <div className="tray-actions">
+                <button
+                  type="button"
+                  className="shelve"
+                  onClick={() =>
+                    openSlip(markedOnShelf, inQuarantine ? "restore" : "quarantine")
+                  }
+                >
+                  {inQuarantine ? "Restore" : "Quarantine"}
+                </button>
+                <button
+                  type="button"
+                  className="stamp"
+                  onClick={() => openSlip(markedOnShelf, "delete")}
+                >
+                  Delete
+                </button>
+              </div>
             ) : null}
             <div className="tray-filters">
               <LinkFilterSelect
@@ -614,6 +771,13 @@ export default function App() {
                 onChange={(next) => {
                   writeStoredRiskFilter(next);
                   setRiskFilter(next);
+                }}
+              />
+              <InvocationFilterSelect
+                value={invocationFilter}
+                onChange={(next) => {
+                  writeStoredInvocationFilter(next);
+                  setInvocationFilter(next);
                 }}
               />
             </div>
@@ -648,6 +812,9 @@ export default function App() {
                   </p>
                   <p className="meta">
                     <span data-kind={skill.kind}>{kindStamp(skill.kind)}</span>
+                    {skill.quarantined && skill.fromScope ? (
+                      <span data-from>from {skill.fromScope}</span>
+                    ) : null}
                     {formStamps(skill)}
                     <time>{formatWhen(skill.mtime)}</time>
                   </p>
@@ -656,8 +823,9 @@ export default function App() {
             ))}
             {!loading && !visible.length && (
               <li className="empty-tray">
-                No cards in this drawer
-                {query ? " match the search." : "."}
+                {inQuarantine && !query
+                  ? "The quarantine is empty. Hold a skill here so no agent reads it."
+                  : `No cards in this drawer${query ? " match the search." : "."}`}
               </li>
             )}
           </ol>
@@ -665,12 +833,13 @@ export default function App() {
 
         <main ref={readerRef} className="reader" aria-live="polite">
           {slip ? (
-            <DeleteConfirm
+            <ActionSlip
               slip={slip}
               skills={skills}
               busy={busy}
+              quarantinePath={quarantinePath}
               onCancel={() => setSlip(null)}
-              onConfirm={confirmDelete}
+              onConfirm={confirmSlip}
             />
           ) : !selected ? (
             <EmptyReader loading={loading} />
@@ -687,7 +856,7 @@ export default function App() {
                 setSlip(null);
                 setSelectedId(id);
               }}
-              onDelete={() => openSlip([selected.id])}
+              onAction={(mode) => openSlip([selected.id], mode)}
             />
           )}
         </main>
@@ -710,11 +879,17 @@ function EmptyReader({ loading }) {
   );
 }
 
-function DeleteConfirm({ slip, skills, busy, onCancel, onConfirm }) {
-  const builtin = slip.cards.filter((c) => c.kind !== "user");
-  const unlinkCount = slip.cards.filter((c) => c.link).length;
+function ActionSlip({ slip, skills, busy, quarantinePath, onCancel, onConfirm }) {
+  const action = ACTIONS[slip.mode];
+  const count = slip.cards.length;
+  const managed = slip.cards.filter(
+    (card) => card.kind !== "user" && card.kind !== "quarantine",
+  );
+  const unlinkCount =
+    slip.mode === "delete" ? slip.cards.filter((card) => card.link).length : 0;
   const going = new Set(slip.ids);
   const hintsFor = (card) => {
+    if (slip.mode !== "delete") return [];
     const hints = [];
     const remaining = (card.copies || []).filter((c) => !going.has(c.id));
     if (remaining.length) {
@@ -734,39 +909,34 @@ function DeleteConfirm({ slip, skills, busy, onCancel, onConfirm }) {
   };
   return (
     <div className="leaf slip">
-      <p className="edition">Delete</p>
-      <h2>
-        Delete {slip.cards.length} card
-        {slip.cards.length === 1 ? "" : "s"} from disk
-      </h2>
-      <p className="warning">
-        There is no undo. Each card names its filesystem effect below.
+      <p className="edition">{action.edition}</p>
+      <h2>{action.heading(count)}</h2>
+      <p className={action.destructive ? "warning" : "aside"}>
+        {action.note(quarantinePath)}
       </p>
       {unlinkCount > 0 && (
         <p className="warning">
           Unlink removes the link only. The target stays.
         </p>
       )}
-      {builtin.length > 0 && (
+      {managed.length > 0 && slip.mode !== "restore" && (
         <p className="warning">
-          {builtin.length} of these live in a plugin cache or builtin drawer and
+          {managed.length} of these live in a plugin cache or builtin drawer and
           may return the next time that tool updates.
         </p>
       )}
       <ol className="slip-list">
         {slip.cards.map((card) => {
-          const effect = deleteEffect(card);
+          const effect = slip.mode === "delete" ? deleteEffect(card) : null;
           return (
             <li key={card.id}>
               <strong>{card.name}</strong>
-              <span className="effect">
-                {effect.label}
-              </span>
-              <code title={effect.path}>{effect.path}</code>
+              {effect ? <span className="effect">{effect.label}</span> : null}
+              <code title={(effect || card).path}>{(effect || card).path}</code>
               {hintsFor(card).map((hint) => (
                 <small key={hint}>{hint}</small>
               ))}
-              {effect.note ? <small>{effect.note}</small> : null}
+              {effect?.note ? <small>{effect.note}</small> : null}
             </li>
           );
         })}
@@ -777,11 +947,11 @@ function DeleteConfirm({ slip, skills, busy, onCancel, onConfirm }) {
         </button>
         <button
           type="button"
-          className="stamp"
+          className={action.destructive ? "stamp" : "shelve"}
           onClick={onConfirm}
           disabled={busy}
         >
-          {busy ? "Deleting…" : "Delete"}
+          {busy ? action.busy : action.label}
         </button>
       </div>
     </div>
@@ -797,7 +967,7 @@ function SkillLeaf({
   setView,
   onOpenFile,
   onSelectCopy,
-  onDelete,
+  onAction,
 }) {
   const fm = detail?.frontmatter || selected.frontmatter || {};
   const keys = Object.keys(fm);
@@ -805,8 +975,15 @@ function SkillLeaf({
   const copies = (detail?.copies?.length ? detail.copies : selected.copies) || [];
   const findings = detail?.findings || selected.findings || [];
   const skillRel = selected.skillRel || "SKILL.md";
-  const showDisk =
-    selected.file || selected.link || selected.origin || copies.length > 0;
+  const showDisk = true;
+  const invocationLabel =
+    selected.invocation === "hook"
+      ? "hook"
+      : selected.invocation === "user"
+        ? "user only"
+        : selected.invocation === "off"
+          ? "off"
+          : "model may call";
   const body = preview
     ? preview.binary
       ? `Binary file · ${formatBytes(preview.size)}`
@@ -826,14 +1003,28 @@ function SkillLeaf({
           </p>
           <p className="stamps">
             <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
+            {selected.quarantined && selected.fromScope ? (
+              <span data-from>from {selected.fromScope}</span>
+            ) : null}
             {formStamps(selected, { origin: "all" })}
             {detail ? <span>{formatBytes(detail.bytes)}</span> : null}
             <span>{formatWhen(selected.mtime)}</span>
           </p>
         </div>
-        <button type="button" className="stamp" onClick={onDelete}>
-          Delete this skill
-        </button>
+        <div className="leaf-actions">
+          <button
+            type="button"
+            className="shelve"
+            onClick={() =>
+              onAction(selected.quarantined ? "restore" : "quarantine")
+            }
+          >
+            {selected.quarantined ? "Restore" : "Quarantine"}
+          </button>
+          <button type="button" className="stamp" onClick={() => onAction("delete")}>
+            Delete
+          </button>
+        </div>
         <div className="leaf-tools">
           <div className="toggle">
             <button
@@ -874,6 +1065,23 @@ function SkillLeaf({
                     : "folder"}
               </dd>
             </div>
+            <div>
+              <dt>invocation</dt>
+              <dd>
+                {invocationLabel}
+                {selected.invocationEvidence ? (
+                  <code title={selected.invocationEvidence}>
+                    {selected.invocationEvidence}
+                  </code>
+                ) : null}
+              </dd>
+            </div>
+            {detail?.quarantinedFrom ? (
+              <div>
+                <dt>restores to</dt>
+                <dd>{detail.quarantinedFrom}</dd>
+              </div>
+            ) : null}
             {selected.link && selected.physicality !== "broken" ? (
               <div>
                 <dt>symlink</dt>
