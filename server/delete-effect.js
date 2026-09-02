@@ -1,5 +1,13 @@
 export function deleteEffect(skill) {
   if (skill.link) {
+    if (skill.physicality === "broken") {
+      return {
+        action: "unlink",
+        label: "Unlink",
+        path: skill.path,
+        note: "The target is already gone",
+      };
+    }
     return {
       action: "unlink",
       label: "Unlink",
