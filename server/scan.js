@@ -810,14 +810,29 @@ export function scanSkills() {
 function censusOf(skills) {
   const live = skills.filter((skill) => !skill.quarantined);
   const physical = live.filter((skill) => skill.physicality === "physical");
-  const hashes = new Set();
+  const byHash = new Map();
   for (const skill of physical) {
-    if (skill.contentHash) hashes.add(skill.contentHash);
+    if (!skill.contentHash) continue;
+    byHash.set(skill.contentHash, (byHash.get(skill.contentHash) || 0) + 1);
+  }
+  let duplicateCopies = 0;
+  let duplicateBytes = 0;
+  for (const skill of physical) {
+    const twins = byHash.get(skill.contentHash) || 1;
+    if (twins > 1) {
+      duplicateCopies += 1;
+      duplicateBytes += dirSizeAndFiles(skill.path).bytes;
+    }
   }
   return {
     total: live.length,
-    unique: hashes.size,
-    duplicates: Math.max(0, physical.length - hashes.size),
+    physical: physical.length,
+    unique: byHash.size,
+    duplicateCopies,
+    duplicateBytes,
+    references: live.filter((skill) => skill.physicality === "reference").length,
+    broken: live.filter((skill) => skill.physicality === "broken").length,
+    duplicates: duplicateCopies,
   };
 }
 
