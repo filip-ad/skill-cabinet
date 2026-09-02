@@ -100,23 +100,30 @@ function describeInstall(p) {
   let link = false;
   let file = false;
   let linkTarget = "";
+  let dev = 0;
+  let ino = 0;
   try {
     const listed = fs.lstatSync(p);
     link = listed.isSymbolicLink();
     if (link) {
       linkTarget = readLinkTarget(p);
       try {
-        file = fs.statSync(p).isFile();
+        const followed = fs.statSync(p);
+        file = followed.isFile();
+        dev = followed.dev;
+        ino = followed.ino;
       } catch {
         file = false;
       }
     } else {
       file = listed.isFile();
+      dev = listed.dev;
+      ino = listed.ino;
     }
   } catch {
     /* missing or unreadable */
   }
-  return { link, file, linkTarget };
+  return { link, file, linkTarget, dev, ino };
 }
 
 function contained(child, parent) {
@@ -233,6 +240,8 @@ function originFromPath(p) {
 
 function originFromPluginFile(file) {
   try {
+    const st = fs.statSync(file, { throwIfNoEntry: false });
+    if (!st || !st.isFile()) return null;
     const data = JSON.parse(fs.readFileSync(file, "utf8"));
     const repo = originFromValue(data.repository);
     if (repo) return repo;
@@ -246,7 +255,8 @@ function originFromPluginFile(file) {
 function originFromGitDir(dir) {
   const gitPath = path.join(dir, ".git");
   try {
-    const listed = fs.lstatSync(gitPath);
+    const listed = fs.lstatSync(gitPath, { throwIfNoEntry: false });
+    if (!listed) return null;
     let configPath = "";
     if (listed.isFile()) {
       const text = fs.readFileSync(gitPath, "utf8");
@@ -598,44 +608,63 @@ function danglingSummary(item) {
   };
 }
 
-function summarizeSkill(item) {
+function summarizeSkill(item, memo, realpaths) {
   const { dir, skillMd, root } = item;
   if (item.dangling) return danglingSummary(item);
-  let text = "";
-  let mtime = 0;
-  let size = 0;
-  let raw;
-  try {
-    const st = fs.statSync(skillMd);
-    mtime = st.mtimeMs;
-    size = st.size;
-    raw = fs.readFileSync(skillMd);
-    text = raw.toString("utf8");
-  } catch {
-    return null;
+  const identity = item.dev || item.ino ? `${item.dev}:${item.ino}` : real(dir);
+  const memoKey = `${identity}|${item.file ? "file" : "dir"}`;
+  let shared = memo.get(memoKey);
+  if (!shared) {
+    let mtime = 0;
+    let size = 0;
+    let raw;
+    try {
+      const st = fs.statSync(skillMd);
+      mtime = st.mtimeMs;
+      size = st.size;
+      raw = fs.readFileSync(skillMd);
+    } catch {
+      return null;
+    }
+    const text = raw.toString("utf8");
+    const { data } = parseFrontmatter(text);
+    shared = {
+      data,
+      mtime,
+      size,
+      contentHash: crypto.createHash("sha256").update(raw).digest("hex"),
+      audited: auditSkill({
+        root: dir,
+        skillFile: skillMd,
+        text,
+        fileOnly: Boolean(item.file),
+      }),
+    };
+    memo.set(memoKey, shared);
   }
-  const { data } = parseFrontmatter(text);
+  let refTarget = "";
+  if (item.link) {
+    refTarget = realpaths.get(identity) || "";
+    if (!refTarget) {
+      refTarget = real(dir);
+      realpaths.set(identity, refTarget);
+    }
+  }
   const base = path.basename(dir);
   const slug = item.file ? base.replace(/\.md$/i, "") : base;
   const name =
-    (typeof data.name === "string" && data.name) ||
-    (typeof data.displayName === "string" && data.displayName) ||
+    (typeof shared.data.name === "string" && shared.data.name) ||
+    (typeof shared.data.displayName === "string" && shared.data.displayName) ||
     slug;
   const description =
-    typeof data.description === "string" ? data.description : "";
-  const audited = auditSkill({
-    root: dir,
-    skillFile: skillMd,
-    text,
-    fileOnly: Boolean(item.file),
-  });
+    typeof shared.data.description === "string" ? shared.data.description : "";
 
   return {
     id: idFor(dir),
     name,
     slug,
     description,
-    frontmatter: data,
+    frontmatter: shared.data,
     scopeId: root.scopeId,
     scopeLabel: root.scopeLabel,
     kind: kindFor(root),
@@ -645,15 +674,15 @@ function summarizeSkill(item) {
     file: Boolean(item.file),
     link: Boolean(item.link),
     linkTarget: item.linkTarget || "",
-    origin: inferOrigin(dir, data, item.linkTarget),
-    contentHash: crypto.createHash("sha256").update(raw).digest("hex"),
-    risk: audited.severity,
-    findings: audited.findings,
+    origin: inferOrigin(dir, shared.data, item.linkTarget),
+    contentHash: shared.contentHash,
+    risk: shared.audited.severity,
+    findings: shared.audited.findings.slice(),
     copies: [],
-    mtime,
-    skillSize: size,
+    mtime: shared.mtime,
+    skillSize: shared.size,
     physicality: item.link ? "reference" : "physical",
-    refTarget: item.link ? real(dir) : "",
+    refTarget,
     refSkillId: "",
   };
 }
@@ -686,6 +715,8 @@ export function attachCopies(skills) {
 
 export function scanRoots(roots) {
   originCache = new Map();
+  const memo = new Map();
+  const realpaths = new Map();
   const found = [];
   for (const root of roots) {
     if (root.recursive) {
@@ -703,7 +734,7 @@ export function scanRoots(roots) {
   const skills = [];
   const byId = new Map();
   for (const item of byPath.values()) {
-    const summary = summarizeSkill(item);
+    const summary = summarizeSkill(item, memo, realpaths);
     if (!summary) continue;
     skills.push(summary);
     byId.set(summary.id, summary);
