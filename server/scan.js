@@ -859,6 +859,7 @@ export function toCatalogSkill(skill) {
     refTarget: skill.refTarget,
     refSkillId: skill.refSkillId,
     copyCount: skill.copies.length,
+    copies: skill.copies,
     mtime: skill.mtime,
     quarantined: Boolean(skill.quarantined),
     fromScope: skill.fromScope || "",
