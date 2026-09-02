@@ -16,6 +16,7 @@
     "dev": "concurrently -k -n api,web -c blue,green \"node --watch server/index.js\" \"vite\"",
     "build": "vite build",
     "start": "node bin/skill-cabinet.js",
+    "test": "vitest run",
     "prepare": "node scripts/ensure-dist.js",
     "prepublishOnly": "npm run build"
   },
@@ -54,7 +55,9 @@
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "vite": "^7.1.5"
+    "supertest": "^7.2.2",
+    "vite": "^7.1.5",
+    "vitest": "^4.1.11"
   },
   "allowScripts": {
     "esbuild@0.28.2": true
