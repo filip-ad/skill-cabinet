@@ -47,6 +47,32 @@ test("POST /api/skills/delete only accepts a loopback Origin", async () => {
   }
 });
 
+test("quarantine and restore use the same loopback Origin check", async () => {
+  const server = await listen();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const pathname of ["/api/skills/quarantine", "/api/skills/restore"]) {
+      const blocked = await fetch(`${base}${pathname}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [] }),
+      });
+      assert.equal(blocked.status, 403);
+      const ok = await fetch(`${base}${pathname}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://127.0.0.1:5173",
+        },
+        body: JSON.stringify({ ids: [] }),
+      });
+      assert.equal(ok.status, 400);
+    }
+  } finally {
+    server.close();
+  }
+});
+
 test("DELETE /api/skills/:id has no route", async () => {
   const server = await listen();
   try {

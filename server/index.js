@@ -202,7 +202,7 @@ app.post("/api/skills/delete", requireLoopbackOrigin, (req, res) => {
   }
 });
 
-app.post("/api/skills/quarantine", (req, res) => {
+app.post("/api/skills/quarantine", requireLoopbackOrigin, (req, res) => {
   try {
     const ids = idsFrom(req.body);
     if (!ids.length) {
@@ -215,7 +215,7 @@ app.post("/api/skills/quarantine", (req, res) => {
   }
 });
 
-app.post("/api/skills/restore", (req, res) => {
+app.post("/api/skills/restore", requireLoopbackOrigin, (req, res) => {
   try {
     const ids = idsFrom(req.body);
     if (!ids.length) {
@@ -244,7 +244,7 @@ if (isProd) {
   });
 }
 
-function start(port, attemptsLeft = 20) {
+function start(port = PREFERRED_PORT, attemptsLeft = 20) {
   const server = app.listen(port, "127.0.0.1");
   server.on("listening", () => {
     const { port: bound } = server.address();
@@ -270,4 +270,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   start(PREFERRED_PORT);
 }
 
-export { app };
+export { app, start };
