@@ -835,6 +835,7 @@ export default function App() {
           {slip ? (
             <ActionSlip
               slip={slip}
+              skills={skills}
               busy={busy}
               quarantinePath={quarantinePath}
               onCancel={() => setSlip(null)}
@@ -878,7 +879,7 @@ function EmptyReader({ loading }) {
   );
 }
 
-function ActionSlip({ slip, busy, quarantinePath, onCancel, onConfirm }) {
+function ActionSlip({ slip, skills, busy, quarantinePath, onCancel, onConfirm }) {
   const action = ACTIONS[slip.mode];
   const count = slip.cards.length;
   const managed = slip.cards.filter(
@@ -886,6 +887,26 @@ function ActionSlip({ slip, busy, quarantinePath, onCancel, onConfirm }) {
   );
   const unlinkCount =
     slip.mode === "delete" ? slip.cards.filter((card) => card.link).length : 0;
+  const going = new Set(slip.ids);
+  const hintsFor = (card) => {
+    if (slip.mode !== "delete") return [];
+    const hints = [];
+    const remaining = (card.copies || []).filter((c) => !going.has(c.id));
+    if (remaining.length) {
+      hints.push(`A physical copy remains in ${remaining[0].scopeLabel}.`);
+    }
+    const references = skills.filter(
+      (s) => s.refSkillId === card.id && !going.has(s.id),
+    );
+    if (references.length) {
+      hints.push(
+        references.length === 1
+          ? "1 drawer links here; deleting orphans it."
+          : `${references.length} drawers link here; deleting orphans them.`,
+      );
+    }
+    return hints;
+  };
   return (
     <div className="leaf slip">
       <p className="edition">{action.edition}</p>
@@ -912,6 +933,9 @@ function ActionSlip({ slip, busy, quarantinePath, onCancel, onConfirm }) {
               <strong>{card.name}</strong>
               {effect ? <span className="effect">{effect.label}</span> : null}
               <code title={(effect || card).path}>{(effect || card).path}</code>
+              {hintsFor(card).map((hint) => (
+                <small key={hint}>{hint}</small>
+              ))}
               {effect?.note ? <small>{effect.note}</small> : null}
             </li>
           );
