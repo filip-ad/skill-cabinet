@@ -19,7 +19,7 @@ Ten named skins live in `src/themes.css`. Carbon is the first-run default. Skins
 
 ## Named rules
 
-**The two-signal rule.** Kind, risk, form, and origin always carry words as well as colour. A red mark without the word "risk" is a defect.
+**The two-signal rule.** Kind, risk, form, and origin always carry words as well as colour. A red mark without the word "risk" is a defect. A reference stamp says "virtual reference"; a dead shortcut says "broken".
 
 **The path is data rule.** Filesystem paths use the mono face, wrap rather than masquerade as prose, and expose the full value on `title` when space is tight.
 
