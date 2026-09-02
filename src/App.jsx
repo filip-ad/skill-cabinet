@@ -649,35 +649,6 @@ export default function App() {
           </div>
         </div>
         <div className="mast-tools">
-          <div className="census">
-            <p>
-              <b>{loading ? "…" : census.total}</b>
-              <span>in house</span>
-            </p>
-            <p>
-              <b>{loading ? "…" : census.physical}</b>
-              <span>physical</span>
-              {census.duplicateCopies ? (
-                <small>
-                  {census.duplicateCopies} copies ·{" "}
-                  {formatBytes(census.duplicateBytes)}
-                </small>
-              ) : null}
-            </p>
-            <p>
-              <b>{loading ? "…" : census.references}</b>
-              <span>references</span>
-            </p>
-            {census.broken ? (
-              <p>
-                <b>{loading ? "…" : census.broken}</b>
-                <span>broken</span>
-              </p>
-            ) : null}
-          </div>
-          <button type="button" className="reshelve" onClick={() => load(true)}>
-            Reshelve
-          </button>
           <ThemeSelect />
         </div>
       </header>
@@ -690,7 +661,34 @@ export default function App() {
       )}
 
       <div className="furniture">
-        <nav className="drawers" aria-label="Scopes">
+        <div className="rail">
+          <div className="house-tools">
+            <div className="census">
+              <p>
+                <b>{loading ? "…" : census.total}</b>
+                <span>in house</span>
+              </p>
+              {loading ? null : (
+                <p className="ledger">
+                  {census.physical} physical
+                  {census.duplicateCopies
+                    ? ` · ${census.duplicateCopies} copies, ${formatBytes(census.duplicateBytes)}`
+                    : null}
+                  {` · ${census.references} references`}
+                  {census.broken ? (
+                    <>
+                      {" · "}
+                      <span data-form="broken">{census.broken} broken</span>
+                    </>
+                  ) : null}
+                </p>
+              )}
+            </div>
+            <button type="button" className="reshelve" onClick={() => load(true)}>
+              Reshelve
+            </button>
+          </div>
+          <nav className="drawers" aria-label="Scopes">
           <button
             type="button"
             className={scopeId === "all" ? "drawer on" : "drawer"}
@@ -722,7 +720,8 @@ export default function App() {
             <span>Quarantine</span>
             <em>{quarantined.length}</em>
           </button>
-        </nav>
+          </nav>
+        </div>
 
         <section className="tray" aria-label="Skills">
           <div className="tray-head">
