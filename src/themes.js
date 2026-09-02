@@ -38,36 +38,43 @@ export function applyTheme(id) {
   return next;
 }
 
-export const LINK_FILTERS = [
+export const FORM_FILTERS = [
   { id: "all", label: "All" },
-  { id: "only", label: "Only" },
-  { id: "hide", label: "Hide" },
+  { id: "physical", label: "Physical" },
+  { id: "references", label: "References" },
+  { id: "broken", label: "Broken" },
 ];
 
-const LINK_KEY = "skill-cabinet-links";
-const LINK_IDS = new Set(LINK_FILTERS.map((t) => t.id));
+const FORM_KEY = "skill-cabinet-form";
+const LEGACY_LINK_KEY = "skill-cabinet-links";
+const FORM_IDS = new Set(FORM_FILTERS.map((t) => t.id));
+const LEGACY_LINK = { hide: "physical", only: "references" };
 
-export function readStoredLinkFilter() {
+export function readStoredFormFilter() {
   try {
-    const value = localStorage.getItem(LINK_KEY);
-    if (value && LINK_IDS.has(value)) return value;
+    const value = localStorage.getItem(FORM_KEY);
+    if (value && FORM_IDS.has(value)) return value;
+    const legacy = localStorage.getItem(LEGACY_LINK_KEY);
+    if (legacy && FORM_IDS.has(legacy)) return legacy;
+    if (legacy && LEGACY_LINK[legacy]) return LEGACY_LINK[legacy];
   } catch {
     /* private mode */
   }
   return "all";
 }
 
-export function writeStoredLinkFilter(id) {
+export function writeStoredFormFilter(id) {
   try {
-    localStorage.setItem(LINK_KEY, id);
+    localStorage.setItem(FORM_KEY, id);
   } catch {
     /* private mode */
   }
 }
 
-export function matchesLinkFilter(skill, filter) {
-  if (filter === "only") return Boolean(skill.link);
-  if (filter === "hide") return !skill.link;
+export function matchesFormFilter(skill, filter) {
+  if (filter === "physical") return skill.physicality === "physical";
+  if (filter === "references") return skill.physicality === "reference";
+  if (filter === "broken") return skill.physicality === "broken";
   return true;
 }
 
