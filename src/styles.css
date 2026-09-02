@@ -1174,6 +1174,7 @@ h3 {
   .mast-chrome {
     flex: 1 1 12rem;
     min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .finder {
