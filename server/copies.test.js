@@ -25,12 +25,14 @@ test("identical markdown bodies are copies of each other", () => {
         scopeLabel: ".agents",
         path: a,
         contentHash: digest,
+        physicality: "physical",
       },
       {
         id: "two",
         scopeLabel: ".claude",
         path: b,
         contentHash: digest,
+        physicality: "physical",
       },
     ];
     attachCopies(skills);
@@ -45,6 +47,28 @@ test("identical markdown bodies are copies of each other", () => {
   }
 });
 
+test("a reference to identical content is not a copy", () => {
+  const skills = [
+    {
+      id: "one",
+      scopeLabel: ".agents",
+      path: "/tmp/a",
+      contentHash: hash("alpha"),
+      physicality: "physical",
+    },
+    {
+      id: "two",
+      scopeLabel: ".claude",
+      path: "/tmp/b",
+      contentHash: hash("alpha"),
+      physicality: "reference",
+    },
+  ];
+  attachCopies(skills);
+  assert.deepEqual(skills[0].copies, []);
+  assert.deepEqual(skills[1].copies, []);
+});
+
 test("different bodies are not copies", () => {
   const skills = [
     {
@@ -52,12 +76,14 @@ test("different bodies are not copies", () => {
       scopeLabel: ".agents",
       path: "/tmp/a",
       contentHash: hash("alpha"),
+      physicality: "physical",
     },
     {
       id: "two",
       scopeLabel: ".claude",
       path: "/tmp/b",
       contentHash: hash("beta"),
+      physicality: "physical",
     },
   ];
   attachCopies(skills);
