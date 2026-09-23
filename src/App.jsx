@@ -1,1229 +1,294 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import YAML from "yaml";
-import {
-  fetchCatalog,
-  fetchSkill,
-  fetchSkillFile,
-  deleteSkills,
-  quarantineSkills,
-  restoreSkills,
-} from "./api.js";
+import { fetchCatalog, fetchHealth, fetchSkill, fetchSkillFile, fetchUsage } from "./api.js";
+import { EMPTY_FILTERS, filterSkills, groupSkills } from "./filters.js";
 import Logo from "./Logo.jsx";
-import {
-  FORM_FILTERS,
-  RISK_FILTERS,
-  INVOCATION_FILTERS,
-  THEMES,
-  applyTheme,
-  matchesFormFilter,
-  matchesRiskFilter,
-  matchesInvocationFilter,
-  readStoredFormFilter,
-  readStoredRiskFilter,
-  readStoredInvocationFilter,
-  readStoredTheme,
-  writeStoredFormFilter,
-  writeStoredRiskFilter,
-  writeStoredInvocationFilter,
-  writeStoredTheme,
-} from "./themes.js";
-import { deleteEffect } from "../server/delete-effect.js";
-import { crossingQuarantineShelf, idsForShelfAction } from "./shelf-actions.js";
+import { describeRevision } from "./versions.js";
 
-function formatBytes(n) {
-  if (!n) return "0 B";
-  const units = ["B", "KB", "MB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v < 10 && i ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+
+function shortDate(value) {
+  if (!value) return "No observations";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
-function formatWhen(ms) {
-  if (!ms) return "—";
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-  }).format(new Date(ms));
+function Metric({ value, label, tone = "" }) {
+  return <div className={`metric ${tone}`}><strong>{value}</strong><span>{label}</span></div>;
 }
 
-function callNumber(skill) {
-  const scope = skill.scopeLabel.replace(/^\./, "").replace(/\//g, "·");
-  return `${scope}  ${skill.slug}`;
-}
-
-function matchesQuery(skill, q) {
-  if (!q) return true;
-  const hay = [
-    skill.name,
-    skill.slug,
-    skill.description,
-    skill.path,
-    skill.scopeLabel,
-    skill.file ? "file" : "",
-    skill.link ? "symlink link" : "",
-    skill.linkTarget || "",
-    skill.origin?.label || "",
-    skill.origin?.url || "",
-    skill.physicality === "broken" ? "broken" : "",
-    skill.physicality === "reference" ? "reference" : "",
-    skill.risk && skill.risk !== "none" ? `risk ${skill.risk}` : "",
-    skill.copyCount ? `copy copies ${skill.copyCount}` : "",
-    skill.quarantined ? "quarantine held" : "",
-    skill.fromScope ? `from ${skill.fromScope}` : "",
-    skill.invocation === "hook"
-      ? "hook every request"
-      : skill.invocation === "user"
-        ? "user only"
-        : skill.invocation === "off"
-          ? "off disabled"
-          : "model may call",
-    skill.invocationEvidence || "",
-  ]
-    .join("\n")
-    .toLowerCase();
-  return hay.includes(q);
-}
-
-function stringifyValue(value) {
-  if (value == null) return "—";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return YAML.stringify(value).trim();
-}
-
-function kindStamp(kind) {
-  if (kind === "builtin") return "builtin";
-  if (kind === "plugin") return "plugin cache";
-  if (kind === "quarantine") return "quarantine";
-  return "user";
-}
-
-const ACTIONS = {
-  delete: {
-    label: "Delete",
-    edition: "Delete",
-    run: deleteSkills,
-    key: "deleted",
-    destructive: true,
-    heading: (n) => `Delete ${n} card${n === 1 ? "" : "s"} from disk`,
-    note: () => "There is no undo. Each card names its filesystem effect below.",
-    busy: "Deleting…",
-    done: (n) => `Deleted ${n} card${n === 1 ? "" : "s"} from disk.`,
-    none: "Nothing was deleted.",
-  },
-  quarantine: {
-    label: "Quarantine",
-    edition: "Quarantine",
-    run: quarantineSkills,
-    key: "quarantined",
-    destructive: false,
-    heading: (n) =>
-      `Quarantine ${n} card${n === 1 ? "" : "s"} out of the drawers`,
-    note: (where) => (
-      <>
-        The cards move to <code>{where}</code>. No agent reads that folder.
-        Restore puts them back where they came from.
-      </>
-    ),
-    busy: "Quarantining…",
-    done: (n) => `Quarantined ${n} card${n === 1 ? "" : "s"}.`,
-    none: "Nothing was quarantined.",
-  },
-  restore: {
-    label: "Restore",
-    edition: "Restore",
-    run: restoreSkills,
-    key: "restored",
-    destructive: false,
-    heading: (n) => `Restore ${n} card${n === 1 ? "" : "s"} to their drawers`,
-    note: () =>
-      "Each card goes back to the path it was filed from. A card whose path is already taken stays in the quarantine.",
-    busy: "Restoring…",
-    done: (n) => `Restored ${n} card${n === 1 ? "" : "s"}.`,
-    none: "Nothing was restored.",
-  },
+const FILTER_HELP = {
+  sourceMachine: "Shows installations published by the selected machine. It does not merge the same skill from other machines.",
+  cli: "Shows installations for the selected CLI, plus shared and all-CLI installations. It excludes other CLI-specific and repository-only installations.",
+  scope: "Shows installations with this exact scope. Global, canonical, and repository-local scopes stay separate.",
+  repository: "Shows only repository-local installations registered to this exact repository. It does not add global skills that may also be usable there.",
+  ownership: "Shows installations with this exact maintenance owner type, such as local, upstream-managed, or repo-owned.",
+  governance: "Shows installations with this exact policy relationship to their approved source.",
+  source: "Shows installations from this exact registry or upstream source. This is source origin, not source machine.",
+  currency: "Shows installations with this exact content state compared with the approved latest version.",
+  occurrence: "Shows installations with assigned use of this evidence type. Exact comes from tool calls. Inferred comes from a clear Codex announcement. No use means no assigned calls.",
+  resolution: "Filters assigned usage. Resolved calls map to one installation. Ambiguous and unresolved calls have no installation row, so those choices can show no rows. Their totals remain at the top.",
+  lastUse: "Shows installations with an assigned call inside this recent time period. Installations without a dated call are excluded.",
 };
 
-function originTitle(origin) {
-  if (origin.certainty === "inferred") {
-    return "Taken from a parent plugin or git remote. This may name the wrapper rather than this skill's own repository.";
-  }
-  return "Taken from the skill's frontmatter or install path.";
+function Filter({ name, label, value, values, onChange, children }) {
+  const inputId = `filter-${name}`;
+  const helpId = `${inputId}-help`;
+  return (
+    <div className="filter">
+      <div className="filter-title">
+        <label htmlFor={inputId}>{label}</label>
+        <button type="button" className="filter-help-button" popoverTarget={helpId} aria-label={`${label} filter help`}>?</button>
+        <div id={helpId} className="filter-popover" popover="auto"><strong>{label}</strong><span>{FILTER_HELP[name]}</span></div>
+      </div>
+      <select id={inputId} value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="all">All</option>
+        {children || values.map((item) => <option key={item} value={item}>{item}</option>)}
+      </select>
+    </div>
+  );
 }
 
-function OriginLink({ origin }) {
-  if (!origin?.url) return null;
-  const inferred = origin.certainty === "inferred";
+function StatusPill({ value }) {
+  const tone = value === "current" ? "good" : value === "update available" ? "warn" : "quiet";
+  return <span className={`pill ${tone}`}>{value}</span>;
+}
+
+function SkillRow({ group, selected, onSelect }) {
+  const skill = group.representative;
+  const installationLabel = group.matching_installations === group.total_installations
+    ? `${group.total_installations} ${group.total_installations === 1 ? "installation" : "installations"}`
+    : `${group.matching_installations} of ${group.total_installations} installations`;
   return (
-    <>
-      <a
-        href={origin.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        data-origin={origin.kind}
-        title={originTitle(origin)}
-        onClick={(event) => event.stopPropagation()}
-      >
-        {origin.label}
-      </a>
-      {inferred ? (
-        <span data-origin-certainty="inferred" title={originTitle(origin)}>
-          inferred
-        </span>
+    <button className={`skill-row ${selected ? "selected" : ""}`} onClick={onSelect}>
+      <span className="skill-mark">{skill.display_name.slice(0, 2).toUpperCase()}</span>
+      <span className="skill-main">
+        <strong>{skill.display_name}</strong>
+        <small>{skill.description || skill.source}</small>
+        <span className="tag-line"><span>{installationLabel}</span><span>{group.cli_summary}</span><span>{skill.ownership}</span></span>
+      </span>
+      <span className="skill-side">
+        <StatusPill value={group.status} />
+        <small>{group.invocations} calls</small>
+      </span>
+    </button>
+  );
+}
+
+function VersionComparison({ currency, checkedAt }) {
+  const installed = describeRevision(currency.installed);
+  const latest = describeRevision(currency.latest);
+  return (
+    <section className="version-comparison" aria-label="Version comparison">
+      <div className="version-heading">
+        <div><strong>Current vs latest</strong><StatusPill value={currency.status} /></div>
+        <span>Verified {shortDate(checkedAt)}</span>
+      </div>
+      <div className="version-grid">
+        <div><span>Current on this machine</span><strong>{installed.label}</strong><small>{installed.note}</small></div>
+        <div><span>Latest available</span><strong>{latest.label}</strong><small>{latest.note}</small></div>
+      </div>
+      <details className="revision-details">
+        <summary>Technical IDs</summary>
+        <dl>
+          <div><dt>Installed</dt><dd>{installed.raw || "Not recorded"}</dd></div>
+          <div><dt>Latest</dt><dd>{latest.raw || "Not recorded"}</dd></div>
+        </dl>
+      </details>
+    </section>
+  );
+}
+
+function Detail({ detail, loading, error, onFile, onInstallation, checkedAt }) {
+  if (loading) return <aside className="detail empty">Loading skill…</aside>;
+  if (error) return <aside className="detail empty error">{error}</aside>;
+  if (!detail) return <aside className="detail empty">Select a skill.</aside>;
+  const skill = detail.installation;
+  return (
+    <aside className="detail">
+      <header className="detail-head">
+        <div><span className="eyebrow">Governed skill</span><h2>{skill.display_name}</h2></div>
+        <StatusPill value={skill.currency.status} />
+      </header>
+      <p className="description">{skill.description}</p>
+      {detail.group_installations.length > 1 ? (
+        <label className="installation-picker">
+          <span>Installation</span>
+          <select value={skill.installation_id} onChange={(event) => onInstallation(event.target.value)}>
+            {detail.group_installations.map((row) => (
+              <option key={row.installation_id} value={row.installation_id}>{row.cli} · {row.scope} · {row.location}</option>
+            ))}
+          </select>
+        </label>
       ) : null}
-    </>
-  );
-}
-
-function riskStamp(risk) {
-  if (risk === "critical" || risk === "high") return "high risk";
-  if (risk === "medium" || risk === "low") return "risk";
-  return "";
-}
-
-function invokeStamp(mode) {
-  if (mode === "hook") return "hook";
-  if (mode === "user") return "user only";
-  if (mode === "off") return "off";
-  return "";
-}
-
-function copyStamp(copies, copyCount) {
-  const n = copyCount ?? copies?.length ?? 0;
-  if (!n) return "";
-  return n === 1 ? "1 copy" : `${n} copies`;
-}
-
-function formStamps(skill, { origin = "attested" } = {}) {
-  const marks = [];
-  if (skill.link) {
-    const broken = skill.physicality === "broken";
-    marks.push(
-      <span key="link" data-form={broken ? "broken" : "reference"}>
-        {broken ? "broken" : "virtual reference"}
-      </span>,
-    );
-  }
-  if (skill.file) {
-    marks.push(
-      <span key="file" data-form="file">
-        file
-      </span>,
-    );
-  }
-  const copies = copyStamp(skill.copies, skill.copyCount);
-  if (copies) {
-    marks.push(
-      <span key="copies" data-copies="">
-        {copies}
-      </span>,
-    );
-  }
-  const risk = riskStamp(skill.risk);
-  if (risk) {
-    marks.push(
-      <span key="risk" data-risk={skill.risk}>
-        {risk}
-      </span>,
-    );
-  }
-  const invoke = invokeStamp(skill.invocation);
-  if (invoke) {
-    marks.push(
-      <span key="invoke" data-invoke={skill.invocation} title={skill.invocationEvidence || ""}>
-        {invoke}
-      </span>,
-    );
-  }
-  if (
-    skill.origin &&
-    (origin === "all" || skill.origin.certainty === "attested")
-  ) {
-    marks.push(<OriginLink key="origin" origin={skill.origin} />);
-  }
-  return marks;
-}
-
-function ThemeSelect() {
-  const [theme, setTheme] = useState(() => applyTheme(readStoredTheme()));
-
-  function onChange(event) {
-    const next = applyTheme(event.target.value);
-    writeStoredTheme(next);
-    setTheme(next);
-  }
-
-  return (
-    <label className="theme-select">
-      <span>Theme</span>
-      <select value={theme} onChange={onChange} aria-label="Color theme">
-        {THEMES.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function FormFilterSelect({ value, onChange }) {
-  return (
-    <label className="tray-filter">
-      <span>Form</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-label="Form filter"
-      >
-        {FORM_FILTERS.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function RiskFilterSelect({ value, onChange }) {
-  return (
-    <label className="tray-filter">
-      <span>Risk</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-label="Risk filter"
-      >
-        {RISK_FILTERS.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function InvocationFilterSelect({ value, onChange }) {
-  return (
-    <label className="tray-filter">
-      <span>Invocation</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-label="How the skill is invoked"
-      >
-        {INVOCATION_FILTERS.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.label}
-          </option>
-        ))}
-      </select>
-    </label>
+      <div className="detail-metrics">
+        <Metric value={detail.usage.invocations || 0} label="selected install calls" />
+        <Metric value={detail.usage.unique_sessions || 0} label="selected install sessions" />
+      </div>
+      <VersionComparison currency={skill.currency} checkedAt={checkedAt} />
+      <dl className="facts">
+        <div><dt>CLI</dt><dd>{skill.cli}</dd></div>
+        <div><dt>Source machine</dt><dd>{skill.source_id || "This machine"}</dd></div>
+        <div><dt>Snapshot</dt><dd>{skill.source_generated_at ? shortDate(skill.source_generated_at) : "Live local data"}</dd></div>
+        <div><dt>Scope</dt><dd>{skill.scope}</dd></div>
+        <div><dt>Owner</dt><dd>{skill.governance_owner || "Not assigned"}</dd></div>
+        <div><dt>Governance</dt><dd>{skill.governance}</dd></div>
+        <div><dt>Source</dt><dd className="path">{skill.source}</dd></div>
+        <div><dt>Tracking issue</dt><dd className="path">{skill.tracking_issue || "None"}</dd></div>
+        <div><dt>Last use</dt><dd>{shortDate(detail.usage.last_use)}</dd></div>
+        <div><dt>Group installs</dt><dd>{detail.group_installations.length}</dd></div>
+        <div><dt>Location</dt><dd className="path">{skill.location}</dd></div>
+      </dl>
+      {detail.usage.by_cli.length || detail.usage.by_repository.length ? (
+        <div className="usage-splits">
+          <div><strong>CLI split</strong><span>{detail.usage.by_cli.map((row) => `${row.key} ${row.invocations}`).join(" · ") || "None"}</span></div>
+          <div><strong>Repository split</strong><span>{detail.usage.by_repository.map((row) => `${row.key} ${row.invocations}`).join(" · ") || "None"}</span></div>
+        </div>
+      ) : null}
+      <div className="manuscript-tabs">
+        <strong>Files</strong>
+        <select value={detail.manuscript.path} onChange={(event) => onFile(event.target.value)}>
+          {detail.files.map((file) => <option key={file.path} value={file.path}>{file.path}</option>)}
+        </select>
+      </div>
+      <article className="manuscript"><Markdown remarkPlugins={[remarkGfm]}>{detail.manuscript.content}</Markdown></article>
+    </aside>
   );
 }
 
 export default function App() {
   const [catalog, setCatalog] = useState(null);
+  const [usage, setUsage] = useState(null);
+  const [health, setHealth] = useState(null);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [scopeId, setScopeId] = useState("all");
   const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [selectedId, setSelectedId] = useState(null);
-  const [checked, setChecked] = useState(() => new Set());
   const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [preview, setPreview] = useState(null);
-  const [view, setView] = useState("manuscript");
-  const [slip, setSlip] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [formFilter, setFormFilter] = useState(readStoredFormFilter);
-  const [riskFilter, setRiskFilter] = useState(readStoredRiskFilter);
-  const [invocationFilter, setInvocationFilter] = useState(
-    readStoredInvocationFilter,
-  );
-  const searchRef = useRef(null);
-  const listRef = useRef(null);
-  const markAllRef = useRef(null);
-  const readerRef = useRef(null);
-
-  async function load(refresh = false) {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await fetchCatalog(refresh);
-      setCatalog(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   useEffect(() => {
-    load();
+    Promise.all([fetchCatalog(), fetchUsage(), fetchHealth()])
+      .then(([nextCatalog, nextUsage, nextHealth]) => {
+        setCatalog(nextCatalog);
+        setUsage(nextUsage);
+        setHealth(nextHealth);
+      })
+      .catch((reason) => setError(reason.message));
   }, []);
 
-  const skills = catalog?.skills ?? [];
-  const scopes = catalog?.scopes ?? [];
-  const census = catalog?.census || {
-    total: skills.length,
-    physical: skills.length,
-    unique: 0,
-    duplicateCopies: 0,
-    duplicateBytes: 0,
-    references: 0,
-    broken: 0,
-    duplicates: 0,
-  };
-  const quarantinePath = catalog?.quarantineRoot || "the quarantine";
-  const inQuarantine = scopeId === "quarantine";
-  const linked = useMemo(
-    () =>
-      skills.filter(
-        (s) =>
-          matchesFormFilter(s, formFilter) &&
-          matchesRiskFilter(s, riskFilter) &&
-          matchesInvocationFilter(s, invocationFilter),
-      ),
-    [skills, formFilter, riskFilter, invocationFilter],
+  const usageBySkill = useMemo(
+    () => new Map((usage?.by_skill || []).map((row) => [row.key, row])),
+    [usage],
   );
-  const live = useMemo(
-    () => linked.filter((s) => !s.quarantined),
-    [linked],
+  const matchingInstallations = useMemo(
+    () => filterSkills(catalog?.skills || [], usageBySkill, query, filters),
+    [catalog, usageBySkill, query, filters],
   );
-  const quarantined = useMemo(
-    () => linked.filter((s) => s.quarantined),
-    [linked],
+  const visible = useMemo(
+    () => groupSkills(catalog?.skills || [], matchingInstallations, usageBySkill),
+    [catalog, matchingInstallations, usageBySkill],
   );
-  const drawerScopes = useMemo(
-    () => scopes.filter((s) => s.id !== "quarantine"),
-    [scopes],
-  );
-
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const pool = inQuarantine ? quarantined : live;
-    return pool.filter((s) => {
-      if (!inQuarantine && scopeId !== "all" && s.scopeId !== scopeId) {
-        return false;
-      }
-      return matchesQuery(s, q);
-    });
-  }, [live, quarantined, inQuarantine, scopeId, query]);
-
-  const markedOnShelf = useMemo(
-    () => visible.filter((s) => checked.has(s.id)).map((s) => s.id),
-    [visible, checked],
-  );
-  const markedCount = markedOnShelf.length;
-  const allVisibleMarked =
-    visible.length > 0 && visible.every((s) => checked.has(s.id));
-
-  useEffect(() => {
-    const el = markAllRef.current;
-    if (!el) return;
-    const someVisibleMarked = visible.some((s) => checked.has(s.id));
-    el.indeterminate = someVisibleMarked && !allVisibleMarked;
-  }, [visible, checked, allVisibleMarked]);
-
-  const scopeCounts = useMemo(() => {
-    const by = new Map();
-    for (const skill of live) {
-      by.set(skill.scopeId, (by.get(skill.scopeId) || 0) + 1);
-    }
-    return by;
-  }, [live]);
 
   useEffect(() => {
     if (!visible.length) {
       setSelectedId(null);
+      setDetail(null);
       return;
     }
-    if (!visible.some((s) => s.id === selectedId)) {
-      setSelectedId(visible[0].id);
+    if (!visible.some((group) => group.installations.some((row) => row.installation_id === selectedId))) {
+      setSelectedId(visible[0].representative.installation_id);
     }
   }, [visible, selectedId]);
 
   useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      setPreview(null);
-      return;
-    }
-    let cancelled = false;
-    setDetailError("");
-    setPreview(null);
-    fetchSkill(selectedId)
-      .then((data) => {
-        if (!cancelled) setDetail(data);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setDetail(null);
-          setDetailError(err.message);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
-
-  useEffect(() => {
-    if (!selectedId || !readerRef.current) return;
-    if (window.matchMedia("(max-width: 960px)").matches) {
-      readerRef.current.scrollIntoView({ block: "nearest" });
-    }
-  }, [selectedId]);
-
-  useEffect(() => {
-    function onKey(e) {
-      const tag = e.target.tagName;
-      const typing =
-        tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable;
-      if (e.key === "/" && !typing) {
-        e.preventDefault();
-        searchRef.current?.focus();
-        return;
-      }
-      if (typing) {
-        if (e.key === "Escape") e.target.blur();
-        return;
-      }
-      if (e.key === "j" || e.key === "k") {
-        e.preventDefault();
-        const i = visible.findIndex((s) => s.id === selectedId);
-        const next = e.key === "j" ? i + 1 : i - 1;
-        const skill = visible[Math.max(0, Math.min(visible.length - 1, next))];
-        if (skill) {
-          setSlip(null);
-          setSelectedId(skill.id);
-          const el = listRef.current?.querySelector(`[data-id="${skill.id}"]`);
-          el?.scrollIntoView({ block: "nearest" });
-        }
-      }
-      if (e.key === "x" && selectedId) {
-        e.preventDefault();
-        toggleChecked(selectedId);
-      }
-      if (e.key === "d" && !slip) {
-        e.preventDefault();
-        openSlip(marked(), "delete");
-      }
-      if (e.key === "q" && !slip && !inQuarantine) {
-        e.preventDefault();
-        openSlip(marked(), "quarantine");
-      }
-      if (e.key === "r" && !slip && inQuarantine) {
-        e.preventDefault();
-        openSlip(marked(), "restore");
-      }
-      if (e.key === "Escape" && slip) {
-        setSlip(null);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [visible, selectedId, checked, slip, inQuarantine, markedOnShelf]);
-
-  function marked() {
-    if (markedOnShelf.length) return markedOnShelf;
-    return selectedId ? [selectedId] : [];
-  }
-
-  function openScope(nextId) {
-    setSlip(null);
-    if (crossingQuarantineShelf(scopeId, nextId)) setChecked(new Set());
-    setScopeId(nextId);
-  }
-
-  function applyFormFilter(next) {
-    writeStoredFormFilter(next);
-    setFormFilter(next);
-  }
-
-  function toggleChecked(id) {
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleVisible() {
-    const ids = visible.map((s) => s.id);
-    const allOn = ids.every((id) => checked.has(id));
-    setChecked((prev) => {
-      const next = new Set(prev);
-      if (allOn) ids.forEach((id) => next.delete(id));
-      else ids.forEach((id) => next.add(id));
-      return next;
-    });
-  }
-
-  function openSlip(ids, mode) {
-    const actionable = idsForShelfAction(ids, skills, mode);
-    if (!actionable.length) return;
-    const cards = actionable
-      .map((id) => skills.find((s) => s.id === id))
-      .filter(Boolean);
-    setSlip({ ids: actionable, cards, mode });
-  }
-
-  async function confirmSlip() {
-    if (!slip) return;
-    const action = ACTIONS[slip.mode];
-    setBusy(true);
-    setNotice("");
-    setError("");
-    try {
-      const result = await action.run(slip.ids);
-      const n = result[action.key]?.length ?? 0;
-      setNotice(n ? action.done(n) : action.none);
-      if (result.errors?.length) {
-        setError(result.errors.map((e) => e.error).join("; "));
-      }
-      setSlip(null);
-      setChecked(new Set());
-      setDetail(null);
-      setSelectedId(null);
-      await load(true);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openFile(relPath) {
     if (!selectedId) return;
-    const card = skills.find((s) => s.id === selectedId);
-    const home = card?.skillRel || "SKILL.md";
-    if (relPath === home || relPath === "SKILL.md") {
-      setPreview(null);
-      return;
-    }
+    let active = true;
+    setDetailLoading(true);
+    setDetailError("");
+    fetchSkill(selectedId)
+      .then((value) => { if (active) setDetail(value); })
+      .catch((reason) => { if (active) setDetailError(reason.message); })
+      .finally(() => { if (active) setDetailLoading(false); });
+    return () => { active = false; };
+  }, [selectedId]);
+
+  async function selectFile(relativePath) {
+    if (!detail) return;
     try {
-      const file = await fetchSkillFile(selectedId, relPath);
-      setPreview(file);
-      setView("source");
-    } catch (err) {
-      setDetailError(err.message);
+      const manuscript = await fetchSkillFile(detail.installation.installation_id, relativePath);
+      setDetail({ ...detail, manuscript });
+    } catch (reason) {
+      setDetailError(reason.message);
     }
   }
 
-  const selected = skills.find((s) => s.id === selectedId) || detail;
+  function setFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  const currentCount = catalog?.skills.filter((row) => row.currency.status === "current").length || 0;
+  const unassigned = usage?.summary.unassigned_exact || 0;
+  const dimensions = catalog?.dimensions || {};
+  const activeFilterCount = Object.values(filters).filter((value) => value !== "all").length;
+  const adapterErrors = (health?.adapter_health || []).reduce((total, row) => total + row.errors, 0);
+  const staleSources = (health?.snapshot_sources || []).filter((row) => row.status === "stale").length;
+  const sourceConflicts = health?.source_conflicts?.length || 0;
+
   return (
-    <div className="desk">
+    <div className="app-shell">
       <header className="masthead">
-        <div className="mast-lead">
-          <div className="wordmark">
-            <Logo className="mark" />
-            <div className="wordmark-text">
-              <h1>Skill Cabinet</h1>
-            </div>
-          </div>
-          <div className="mast-chrome">
-            <div className="finder">
-              <label htmlFor="cabinet-find">Find</label>
-              <input
-                id="cabinet-find"
-                ref={searchRef}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="name, description, path, origin, frontmatter"
-                type="search"
-                spellCheck="false"
-              />
-              <p className="keys">
-                j k move · / find · x mark · q quarantine · r restore · d delete
-              </p>
-            </div>
-            <ThemeSelect />
-          </div>
-        </div>
+        <div className="brand"><Logo /><div><span className="eyebrow">Private · governed · read-only</span><h1>Skills Cabinet</h1></div></div>
+        <div className="freshness"><span className="live-dot" />Currency checked {shortDate(catalog?.currency_checked_at)}</div>
       </header>
 
-      {(error || notice) && (
-        <div className="notices">
-          {notice && <p className="notice">{notice}</p>}
-          {error && <p className="notice fault">{error}</p>}
-        </div>
-      )}
-
-      <div className="furniture">
-        <div className="rail">
-          <div className="house-tools">
-            <p className="census">
-              <b>{loading ? "…" : census.total}</b>
-              <span>in house</span>
-            </p>
-            <div className="house-note">
-              {loading ? null : (
-                <p className="ledger">
-                  {census.physical} physical
-                  {census.duplicateCopies
-                    ? ` · ${census.duplicateCopies} copies, ${formatBytes(census.duplicateBytes)}`
-                    : null}
-                  {` · ${census.references} references`}
-                  {census.broken ? (
-                    <>
-                      {" · "}
-                      <button
-                        type="button"
-                        data-form="broken"
-                        aria-pressed={formFilter === "broken"}
-                        onClick={() => {
-                          const next = formFilter === "broken" ? "all" : "broken";
-                          applyFormFilter(next);
-                          if (next === "broken" && inQuarantine) openScope("all");
-                        }}
-                      >
-                        {census.broken} broken
-                      </button>
-                    </>
-                  ) : null}
-                </p>
-              )}
-              <button type="button" className="reshelve" onClick={() => load(true)}>
-                Reshelve
-              </button>
-            </div>
-          </div>
-          <nav className="drawers" aria-label="Scopes">
-          <button
-            type="button"
-            className={scopeId === "all" ? "drawer on" : "drawer"}
-            onClick={() => openScope("all")}
-          >
-            <i />
-            <span>All drawers</span>
-            <em>{live.length}</em>
-          </button>
-          {drawerScopes.map((scope) => (
-            <button
-              key={scope.id}
-              type="button"
-              className={scopeId === scope.id ? "drawer on" : "drawer"}
-              onClick={() => openScope(scope.id)}
-            >
-              <i data-kind={scope.kind} />
-              <span>{scope.label}</span>
-              <em>{scopeCounts.get(scope.id) ?? 0}</em>
-            </button>
-          ))}
-          <button
-            type="button"
-            className={inQuarantine ? "drawer quarantine on" : "drawer quarantine"}
-            onClick={() => openScope("quarantine")}
-            title={`Held out of every drawer an agent reads · ${quarantinePath}`}
-          >
-            <i data-kind="quarantine" />
-            <span>Quarantine</span>
-            <em>{quarantined.length}</em>
-          </button>
-          </nav>
-        </div>
-
-        <section className="tray" aria-label="Skills">
-          <div className="tray-head">
-            <label className="check">
-              <input
-                ref={markAllRef}
-                type="checkbox"
-                checked={allVisibleMarked}
-                onChange={toggleVisible}
-                aria-label="Mark all shown cards"
-              />
-              <span>
-                {markedCount ? `${markedCount} marked` : `${visible.length} shown`}
-              </span>
-            </label>
-            {markedCount > 0 ? (
-              <div className="tray-actions">
-                <button
-                  type="button"
-                  className="shelve"
-                  onClick={() =>
-                    openSlip(markedOnShelf, inQuarantine ? "restore" : "quarantine")
-                  }
-                >
-                  {inQuarantine ? "Restore" : "Quarantine"}
-                </button>
-                <button
-                  type="button"
-                  className="stamp"
-                  onClick={() => openSlip(markedOnShelf, "delete")}
-                >
-                  Delete
-                </button>
-              </div>
-            ) : null}
-            <div className="tray-filters">
-              <FormFilterSelect
-                value={formFilter}
-                onChange={applyFormFilter}
-              />
-              <RiskFilterSelect
-                value={riskFilter}
-                onChange={(next) => {
-                  writeStoredRiskFilter(next);
-                  setRiskFilter(next);
-                }}
-              />
-              <InvocationFilterSelect
-                value={invocationFilter}
-                onChange={(next) => {
-                  writeStoredInvocationFilter(next);
-                  setInvocationFilter(next);
-                }}
-              />
-            </div>
-          </div>
-          <ol ref={listRef} className="cards">
-            {visible.map((skill) => (
-              <li key={skill.id}>
-                <article
-                  data-id={skill.id}
-                  className={
-                    skill.id === selectedId ? "index-card selected" : "index-card"
-                  }
-                  onClick={() => {
-                    setSlip(null);
-                    setSelectedId(skill.id);
-                  }}
-                >
-                  <label
-                    className="tick"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked.has(skill.id)}
-                      onChange={() => toggleChecked(skill.id)}
-                    />
-                  </label>
-                  <p className="call">{callNumber(skill)}</p>
-                  <h2>{skill.name}</h2>
-                  <p className="blurb">
-                    {skill.description || "No description in the frontmatter."}
-                  </p>
-                  <p className="meta">
-                    <span data-kind={skill.kind}>{kindStamp(skill.kind)}</span>
-                    {skill.quarantined && skill.fromScope ? (
-                      <span data-from>from {skill.fromScope}</span>
-                    ) : null}
-                    {formStamps(skill)}
-                    <time>{formatWhen(skill.mtime)}</time>
-                  </p>
-                </article>
-              </li>
-            ))}
-            {!loading && !visible.length && (
-              <li className="empty-tray">
-                {inQuarantine && !query
-                  ? "The quarantine is empty. Hold a skill here so no agent reads it."
-                  : `No cards in this drawer${query ? " match the search." : "."}`}
-              </li>
-            )}
-          </ol>
-        </section>
-
-        <main ref={readerRef} className="reader" aria-live="polite">
-          {slip ? (
-            <ActionSlip
-              slip={slip}
-              skills={skills}
-              busy={busy}
-              quarantinePath={quarantinePath}
-              onCancel={() => setSlip(null)}
-              onConfirm={confirmSlip}
-            />
-          ) : !selected ? (
-            <EmptyReader loading={loading} />
-          ) : (
-            <SkillLeaf
-              selected={selected}
-              detail={detail}
-              detailError={detailError}
-              preview={preview}
-              view={view}
-              setView={setView}
-              onOpenFile={openFile}
-              onSelectCopy={(id) => {
-                setSlip(null);
-                setSelectedId(id);
-              }}
-              onAction={(mode) => openSlip([selected.id], mode)}
-            />
-          )}
-        </main>
-      </div>
-    </div>
-  );
-}
-
-function EmptyReader({ loading }) {
-  return (
-    <div className="leaf empty">
-      <p className="edition">Reading desk</p>
-      <h2>{loading ? "Opening the cabinet…" : "Select a card"}</h2>
-      <p>
-        {loading
-          ? "Walking known skill drawers on this machine."
-          : "Choose a skill from the tray. The manuscript, frontmatter, and any accompanying files will be laid out here."}
-      </p>
-    </div>
-  );
-}
-
-function ActionSlip({ slip, skills, busy, quarantinePath, onCancel, onConfirm }) {
-  const action = ACTIONS[slip.mode];
-  const count = slip.cards.length;
-  const managed = slip.cards.filter(
-    (card) => card.kind !== "user" && card.kind !== "quarantine",
-  );
-  const unlinkCount =
-    slip.mode === "delete" ? slip.cards.filter((card) => card.link).length : 0;
-  const going = new Set(slip.ids);
-  const hintsFor = (card) => {
-    if (slip.mode !== "delete") return [];
-    const hints = [];
-    const remaining = (card.copies || []).filter((c) => !going.has(c.id));
-    if (remaining.length) {
-      hints.push(`A physical copy remains in ${remaining[0].scopeLabel}.`);
-    }
-    const references = skills.filter(
-      (s) => s.refSkillId === card.id && !going.has(s.id),
-    );
-    if (references.length) {
-      hints.push(
-        references.length === 1
-          ? "1 drawer links here; deleting orphans it."
-          : `${references.length} drawers link here; deleting orphans them.`,
-      );
-    }
-    return hints;
-  };
-  return (
-    <div className="leaf slip">
-      <p className="edition">{action.edition}</p>
-      <h2>{action.heading(count)}</h2>
-      <p className={action.destructive ? "warning" : "aside"}>
-        {action.note(quarantinePath)}
-      </p>
-      {unlinkCount > 0 && (
-        <p className="warning">
-          Unlink removes the link only. The target stays.
-        </p>
-      )}
-      {managed.length > 0 && slip.mode !== "restore" && (
-        <p className="warning">
-          {managed.length} of these live in a plugin cache or builtin drawer and
-          may return the next time that tool updates.
-        </p>
-      )}
-      <ol className="slip-list">
-        {slip.cards.map((card) => {
-          const effect = slip.mode === "delete" ? deleteEffect(card) : null;
-          return (
-            <li key={card.id}>
-              <strong>{card.name}</strong>
-              {effect ? <span className="effect">{effect.label}</span> : null}
-              <code title={(effect || card).path}>{(effect || card).path}</code>
-              {hintsFor(card).map((hint) => (
-                <small key={hint}>{hint}</small>
-              ))}
-              {effect?.note ? <small>{effect.note}</small> : null}
-            </li>
-          );
-        })}
-      </ol>
-      <div className="slip-actions">
-        <button type="button" className="textish" onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className={action.destructive ? "stamp" : "shelve"}
-          onClick={onConfirm}
-          disabled={busy}
-        >
-          {busy ? action.busy : action.label}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function SkillLeaf({
-  selected,
-  detail,
-  detailError,
-  preview,
-  view,
-  setView,
-  onOpenFile,
-  onSelectCopy,
-  onAction,
-}) {
-  const fm = detail?.frontmatter || selected.frontmatter || {};
-  const keys = Object.keys(fm);
-  const files = detail?.files || [];
-  const copies = (detail?.copies?.length ? detail.copies : selected.copies) || [];
-  const findings = detail?.findings || selected.findings || [];
-  const skillRel = selected.skillRel || "SKILL.md";
-  const showDisk = true;
-  const invocationLabel =
-    selected.invocation === "hook"
-      ? "hook"
-      : selected.invocation === "user"
-        ? "user only"
-        : selected.invocation === "off"
-          ? "off"
-          : "model may call";
-  const body = preview
-    ? preview.binary
-      ? `Binary file · ${formatBytes(preview.size)}`
-      : preview.content
-    : view === "source"
-      ? detail?.source || ""
-      : detail?.body || "";
-
-  return (
-    <article className="leaf">
-      <header className="leaf-head">
-        <div className="leaf-ident">
-          <p className="call">{callNumber(selected)}</p>
-          <h2>{selected.name}</h2>
-          <p className="path" title={selected.path}>
-            {selected.path}
-          </p>
-          <p className="stamps">
-            <span data-kind={selected.kind}>{kindStamp(selected.kind)}</span>
-            {selected.quarantined && selected.fromScope ? (
-              <span data-from>from {selected.fromScope}</span>
-            ) : null}
-            {formStamps(selected, { origin: "all" })}
-            {detail ? <span>{formatBytes(detail.bytes)}</span> : null}
-            <span>{formatWhen(selected.mtime)}</span>
-          </p>
-        </div>
-        <div className="leaf-actions">
-          <button
-            type="button"
-            className="shelve"
-            onClick={() =>
-              onAction(selected.quarantined ? "restore" : "quarantine")
-            }
-          >
-            {selected.quarantined ? "Restore" : "Quarantine"}
-          </button>
-          <button type="button" className="stamp" onClick={() => onAction("delete")}>
-            Delete
-          </button>
-        </div>
-        <div className="leaf-tools">
-          <div className="toggle">
-            <button
-              type="button"
-              className={!preview && view === "manuscript" ? "on" : ""}
-              onClick={() => {
-                setView("manuscript");
-                onOpenFile(skillRel);
-              }}
-            >
-              Manuscript
-            </button>
-            <button
-              type="button"
-              className={!preview && view === "source" ? "on" : ""}
-              onClick={() => {
-                onOpenFile(skillRel);
-                setView("source");
-              }}
-            >
-              Source
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {showDisk && (
-        <section className="catalogue">
-          <h3>On disk</h3>
-          <dl>
-            <div>
-              <dt>form</dt>
-              <dd>
-                {selected.physicality === "broken"
-                  ? "broken link"
-                  : selected.file
-                    ? "file"
-                    : "folder"}
-              </dd>
-            </div>
-            <div>
-              <dt>invocation</dt>
-              <dd>
-                {invocationLabel}
-                {selected.invocationEvidence ? (
-                  <code title={selected.invocationEvidence}>
-                    {selected.invocationEvidence}
-                  </code>
-                ) : null}
-              </dd>
-            </div>
-            {detail?.quarantinedFrom ? (
-              <div>
-                <dt>restores to</dt>
-                <dd>{detail.quarantinedFrom}</dd>
-              </div>
-            ) : null}
-            {selected.link && selected.physicality !== "broken" ? (
-              <div>
-                <dt>symlink</dt>
-                <dd>{selected.linkTarget || "yes"}</dd>
-              </div>
-            ) : null}
-            {selected.physicality === "reference" ? (
-              <div>
-                <dt>points to</dt>
-                <dd>
-                  <code title={selected.refTarget}>{selected.refTarget}</code>
-                  {selected.refSkillId ? null : (
-                    <span data-origin-certainty="inferred">
-                      outside the cabinet
-                    </span>
-                  )}
-                </dd>
-              </div>
-            ) : null}
-            {selected.origin ? (
-              <div>
-                <dt>origin</dt>
-                <dd>
-                  <OriginLink origin={selected.origin} />
-                </dd>
-              </div>
-            ) : null}
-            {copies.length > 0 ? (
-              <div>
-                <dt>copies</dt>
-                <dd>
-                  <ul className="copy-list">
-                    {copies.map((copy) => (
-                      <li key={copy.id}>
-                        <button
-                          type="button"
-                          onClick={() => onSelectCopy(copy.id)}
-                        >
-                          {copy.scopeLabel}
-                        </button>
-                        <code title={copy.path}>{copy.path}</code>
-                      </li>
-                    ))}
-                  </ul>
-                </dd>
-              </div>
-            ) : null}
-          </dl>
-        </section>
-      )}
-
-      {findings.length > 0 && (
-        <section className="catalogue">
-          <h3>Risk</h3>
-          <dl>
-            {findings.map((item, index) => (
-              <div key={`${item.rule}-${item.file}-${item.line}-${index}`}>
-                <dt data-risk={item.severity}>{item.severity}</dt>
-                <dd>
-                  {item.message}
-                  <code title={`${item.file}:${item.line}`}>
-                    {item.file}:{item.line} · {item.rule}
-                  </code>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      )}
-
-      {keys.length > 0 && (
-        <section className="catalogue">
-          <h3>Frontmatter</h3>
-          <dl>
-            {keys.map((key) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>{stringifyValue(fm[key])}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      )}
-
-      {files.length > 0 && (
-        <section className="folio">
-          <h3>Folio</h3>
-          <ul>
-            {files.map((file) => (
-              <li key={file.path}>
-                <button
-                  type="button"
-                  className={
-                    (preview && preview.path === file.path) ||
-                    (!preview && file.path === skillRel)
-                      ? "on"
-                      : ""
-                  }
-                  onClick={() => onOpenFile(file.path)}
-                >
-                  {file.path}
-                </button>
-                <span>{formatBytes(file.size)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {detailError && <p className="notice fault">{detailError}</p>}
-
-      <section className="manuscript">
-        {preview && (
-          <p className="edition">
-            {preview.path}
-            {preview.binary ? " · not a text preview" : ""}
-          </p>
-        )}
-        {!detail && !detailError ? (
-          <p className="edition">Fetching the manuscript…</p>
-        ) : preview || view === "source" ? (
-          <pre className="source">
-            <code>{body}</code>
-          </pre>
-        ) : (
-          <div className="prose">
-            <Markdown remarkPlugins={[remarkGfm]}>
-              {detail?.body || "*This skill has no body after the frontmatter.*"}
-            </Markdown>
-          </div>
-        )}
+      {error ? <div className="fatal">{error}</div> : null}
+      <section className="metrics-bar">
+        <Metric value={catalog?.counts.canonical_groups || "—"} label="unique skills" />
+        <Metric value={catalog?.counts.installations || "—"} label="installations" />
+        <Metric value={health?.snapshot_sources?.length || (catalog ? 1 : "—")} label="source machines" />
+        <Metric value={usage?.summary.invocations || 0} label="observed calls" tone="accent" />
+        <Metric value={currentCount} label="current installs" />
+        <Metric value={unassigned} label="exact, unassigned" tone={unassigned ? "warn" : ""} />
       </section>
-    </article>
+
+      <main className="workspace">
+        <section className="catalog-panel">
+          <div className="search-row">
+            <label className="search"><span>Find</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, path, owner, source…" /></label>
+            <button className="clear" onClick={() => { setQuery(""); setFilters(EMPTY_FILTERS); }}>Clear filters</button>
+          </div>
+          <details className="filter-drawer">
+            <summary>
+              <strong>Filters</strong>
+              <span>{activeFilterCount ? `${activeFilterCount} active` : "All installations"}</span>
+            </summary>
+            <div className="filters">
+              <Filter name="sourceMachine" label="Source machine" value={filters.sourceMachine} values={dimensions.source_machine || []} onChange={(value) => setFilter("sourceMachine", value)} />
+              <Filter name="cli" label="CLI" value={filters.cli} values={dimensions.cli || []} onChange={(value) => setFilter("cli", value)} />
+              <Filter name="scope" label="Scope" value={filters.scope} values={dimensions.scope || []} onChange={(value) => setFilter("scope", value)} />
+              <Filter name="repository" label="Repository" value={filters.repository} values={dimensions.repository || []} onChange={(value) => setFilter("repository", value)} />
+              <Filter name="ownership" label="Ownership" value={filters.ownership} values={dimensions.ownership || []} onChange={(value) => setFilter("ownership", value)} />
+              <Filter name="governance" label="Governance" value={filters.governance} values={dimensions.governance || []} onChange={(value) => setFilter("governance", value)} />
+              <Filter name="source" label="Source" value={filters.source} values={dimensions.source || []} onChange={(value) => setFilter("source", value)} />
+              <Filter name="currency" label="Currency" value={filters.currency} values={dimensions.currency || []} onChange={(value) => setFilter("currency", value)} />
+              <Filter name="occurrence" label="Occurrence" value={filters.occurrence} values={[]} onChange={(value) => setFilter("occurrence", value)}><option value="exact">Exact</option><option value="inferred">Inferred</option><option value="none">No use</option></Filter>
+              <Filter name="resolution" label="Identity" value={filters.resolution} values={[]} onChange={(value) => setFilter("resolution", value)}><option value="resolved">Resolved</option><option value="ambiguous">Ambiguous</option><option value="unresolved">Unresolved</option><option value="none">No use</option></Filter>
+              <Filter name="lastUse" label="Last use" value={filters.lastUse} values={[]} onChange={(value) => setFilter("lastUse", value)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></Filter>
+            </div>
+          </details>
+          <div className="list-heading"><strong>{visible.length}</strong> skills · {matchingInstallations.length} matching installations</div>
+          <div className="skill-list">
+            {visible.map((group) => <SkillRow key={group.group_id} group={group} selected={group.installations.some((row) => row.installation_id === selectedId)} onSelect={() => setSelectedId(group.representative.installation_id)} />)}
+          </div>
+          <footer className="evidence-note">
+            <strong>Evidence boundary</strong>
+            <span>Claude and Kimi structured calls are exact. Codex history is inferred. Antigravity history and recorder logs are not counted in v1.</span>
+            <small>{health?.snapshot_sources?.length || 1} sources · {staleSources} stale · {sourceConflicts} conflicts · {adapterErrors} adapter errors</small>
+          </footer>
+        </section>
+        <Detail detail={detail} loading={detailLoading} error={detailError} onFile={selectFile} onInstallation={setSelectedId} checkedAt={detail?.installation.currency_checked_at || catalog?.currency_checked_at} />
+      </main>
+    </div>
   );
 }

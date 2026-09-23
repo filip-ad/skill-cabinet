@@ -1,0 +1,33 @@
+[Unit]
+Description=Skill Cabinet read-only dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=skill-cabinet
+Group=skill-cabinet
+WorkingDirectory=/srv/skill-cabinet/current
+Environment=NODE_ENV=production
+Environment=PORT=8050
+Environment=SKILL_CABINET_NO_OPEN=1
+Environment=SKILL_CABINET_SNAPSHOT_DIR=/var/lib/skill-cabinet/snapshots
+Environment=SKILL_CABINET_ALLOWED_HOSTS=racketdata-files-vps.tail12e6bc.ts.net
+ExecStart=/usr/local/bin/node bin/skill-cabinet.js
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

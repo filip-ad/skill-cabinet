@@ -1,10 +1,12 @@
 {
   "name": "skill-cabinet",
-  "version": "0.6.0",
-  "description": "Browse and delete agent skills installed on this machine across .agents, .claude, .codex, .cursor, and similar drawers.",
+  "version": "1.0.0",
+  "description": "Read-only private dashboard for governed agent skill snapshots.",
   "type": "module",
   "bin": {
-    "skill-cabinet": "bin/skill-cabinet.js"
+    "skill-cabinet": "bin/skill-cabinet.js",
+    "skill-usage": "bin/skill-usage.js",
+    "skill-snapshot": "bin/skill-snapshot.js"
   },
   "files": [
     "bin",
@@ -16,20 +18,20 @@
     "dev": "concurrently -k -n api,web -c blue,green \"node --watch server/index.js\" \"vite\"",
     "build": "vite build",
     "start": "node bin/skill-cabinet.js",
-    "test": "node --test server/*.test.js",
+    "test": "node --test server/*.test.js src/*.test.js",
     "prepare": "node scripts/ensure-dist.js",
     "prepublishOnly": "npm run build"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/subsy/skill-cabinet.git"
+    "url": "git+https://github.com/filip-ad/skill-cabinet.git"
   },
-  "homepage": "https://github.com/subsy/skill-cabinet#readme",
+  "homepage": "https://github.com/filip-ad/skill-cabinet#readme",
   "bugs": {
-    "url": "https://github.com/subsy/skill-cabinet/issues"
+    "url": "https://github.com/filip-ad/skill-cabinet/issues"
   },
   "keywords": [
     "skills",
@@ -45,8 +47,7 @@
     "access": "public"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "yaml": "^2.8.1"
+    "express": "^5.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.2",

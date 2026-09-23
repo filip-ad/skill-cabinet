@@ -1,273 +1,183 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import express from "express";
 import {
-  scanSkills,
-  readSkill,
-  readSkillFile,
-  assertDeletable,
-  deleteSkillDir,
-  toCatalogSkill,
-  quarantineRoot,
-} from "./scan.js";
-import {
-  quarantineSkill,
-  restoreSkill,
-  quarantineRecordFor,
-  forgetQuarantinePath,
-} from "./quarantine.js";
+  catalogPayload,
+  listCatalogFiles,
+  loadCatalog,
+  readCatalogFile,
+} from "./catalog.js";
+import { loadSnapshotDirectory } from "./snapshot.js";
+import { defaultUsagePath, UsageStore } from "./usage.js";
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const PREFERRED_PORT = Number(process.env.PORT || 3781);
-const isProd = process.env.NODE_ENV === "production";
+const CSP = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "connect-src 'self'",
+  "font-src 'self'",
+  "frame-ancestors 'none'",
+  "img-src 'self' data:",
+  "object-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+].join("; ");
 
-let cache = { at: 0, payload: null };
+function hostName(value) {
+  const raw = String(value || "").toLowerCase();
+  return raw.startsWith("[") ? raw.slice(1, raw.indexOf("]")) : raw.split(":")[0];
+}
 
-function getIndex(force = false) {
-  if (!force && cache.payload) return cache.payload;
-  const payload = scanSkills();
-  cache = { at: Date.now(), payload };
-  return payload;
+function configuredHosts(value = process.env.SKILL_CABINET_ALLOWED_HOSTS || "") {
+  return new Set([
+    "127.0.0.1",
+    "localhost",
+    "::1",
+    ...value.split(",").map((item) => hostName(item.trim())).filter(Boolean),
+  ]);
+}
+
+export function createApp({ catalog, usageStore, distRoot = null, allowedHosts = configuredHosts() } = {}) {
+  const app = express();
+  app.disable("x-powered-by");
+  app.use((req, res, next) => {
+    if (!allowedHosts.has(hostName(req.headers.host))) {
+      res.status(403).json({ error: "Skill Cabinet rejected this host" });
+      return;
+    }
+    res.setHeader("Content-Security-Policy", CSP);
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    next();
+  });
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/") && req.method !== "GET") {
+      res.setHeader("Allow", "GET");
+      res.status(405).json({ error: "The dashboard API is read-only" });
+      return;
+    }
+    next();
+  });
+
+  app.get("/api/health", (_req, res) => {
+    const usage = usageStore.aggregates();
+    res.json({
+      ok: true,
+      mode: "read-only",
+      inventory_loaded_at: catalog.loadedAt,
+      currency_checked_at: catalog.currency.checked_at,
+      usage_database: usageStore.dbPath,
+      recovered_corruption: usageStore.recovered,
+      recovery_path: usageStore.recoveryPath,
+      adapter_health: usage.adapter_health,
+      snapshot_sources: catalog.sourceHealth || [],
+      source_conflicts: catalog.conflicts || [],
+      history_limits: {
+        claude: "exact structured Skill calls",
+        kimi: "exact structured Skill calls",
+        codex: "historical visible announcements are inferred",
+        antigravity: "history is not counted in v1",
+      },
+    });
+  });
+
+  app.get("/api/catalog", (_req, res) => {
+    res.json(catalogPayload(catalog));
+  });
+
+  app.get("/api/usage", (_req, res) => {
+    res.json(usageStore.aggregates());
+  });
+
+  app.get("/api/skills/:id", (req, res, next) => {
+    try {
+      const installation = catalog.byId.get(req.params.id);
+      if (!installation) {
+        res.status(404).json({ error: "Governed skill installation not found" });
+        return;
+      }
+      const manuscript = readCatalogFile(catalog, installation, "SKILL.md");
+      res.json({
+        installation,
+        canonical_group: catalog.groupsById.get(installation.canonical_group_id) || null,
+        group_installations: catalog.installations.filter(
+          (row) => row.canonical_group_id === installation.canonical_group_id,
+        ),
+        usage: usageStore.forInstallation(installation.installation_id),
+        files: listCatalogFiles(catalog, installation),
+        manuscript,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/skills/:id/file", (req, res, next) => {
+    try {
+      const installation = catalog.byId.get(req.params.id);
+      if (!installation) {
+        res.status(404).json({ error: "Governed skill installation not found" });
+        return;
+      }
+      res.json(readCatalogFile(catalog, installation, String(req.query.path || "")));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  if (distRoot) {
+    app.use(express.static(distRoot));
+    app.get("/{*splat}", (req, res) => {
+      if (req.path.startsWith("/api/")) {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      res.sendFile(path.join(distRoot, "index.html"));
+    });
+  }
+
+  app.use((error, _req, res, _next) => {
+    res.status(error.status || 500).json({ error: error.message });
+  });
+  return app;
+}
+
+export function createRuntime() {
+  if (process.env.SKILL_CABINET_SNAPSHOT_DIR) {
+    return loadSnapshotDirectory(process.env.SKILL_CABINET_SNAPSHOT_DIR);
+  }
+  const catalog = loadCatalog();
+  const usageStore = new UsageStore({ dbPath: defaultUsagePath(), inventory: catalog.inventory });
+  return { catalog, usageStore };
 }
 
 function openBrowser(url) {
   if (process.env.SKILL_CABINET_NO_OPEN === "1") return;
-  const platform = process.platform;
-  const cmd =
-    platform === "darwin" ? "open" : platform === "win32" ? "cmd" : "xdg-open";
-  const args = platform === "win32" ? ["/c", "start", "", url] : [url];
-  spawn(cmd, args, { stdio: "ignore", detached: true }).unref();
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  spawn(command, args, { stdio: "ignore", detached: true }).unref();
 }
 
-const app = express();
-app.use(express.json({ limit: "1mb" }));
-
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-
-export function isLoopbackOrigin(origin) {
-  if (!origin) return false;
-  try {
-    return LOOPBACK_HOSTS.has(new URL(origin).hostname);
-  } catch {
-    return false;
+export function startServer({ port = Number(process.env.PORT || 3781), production = process.env.NODE_ENV === "production" } = {}) {
+  const runtime = createRuntime();
+  const distRoot = production ? path.join(ROOT, "dist") : null;
+  if (distRoot && !fs.existsSync(path.join(distRoot, "index.html"))) {
+    throw new Error("Missing dist/. Run `npm run build` first.");
   }
-}
-
-function requireLoopbackOrigin(req, res, next) {
-  if (!isLoopbackOrigin(req.headers.origin)) {
-    res.status(403).json({ error: "Cross-origin request blocked" });
-    return;
-  }
-  next();
-}
-
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
-});
-
-app.get("/api/skills", (req, res) => {
-  try {
-    const index = getIndex(req.query.refresh === "1");
-    const live = index.skills.filter((skill) => !skill.quarantined);
-    const scopes = [];
-    const byScope = new Map();
-    for (const skill of live) {
-      if (!byScope.has(skill.scopeId)) {
-        byScope.set(skill.scopeId, {
-          id: skill.scopeId,
-          label: skill.scopeLabel,
-          kind: skill.kind,
-          count: 0,
-        });
-        scopes.push(byScope.get(skill.scopeId));
-      }
-      byScope.get(skill.scopeId).count += 1;
-    }
-    res.json({
-      home: process.env.HOME,
-      scannedAt: cache.at,
-      quarantineRoot: quarantineRoot(),
-      total: live.length,
-      census: index.census,
-      scopes,
-      skills: index.skills.map(toCatalogSkill),
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/api/skills/:id", (req, res) => {
-  try {
-    const index = getIndex();
-    const summary = index.byId.get(req.params.id);
-    if (!summary) {
-      res.status(404).json({ error: "Skill not in the cabinet" });
-      return;
-    }
-    const detail = readSkill(summary);
-    if (summary.quarantined) {
-      const record = quarantineRecordFor(summary.path);
-      if (record) {
-        detail.quarantinedFrom = record.originPath;
-        detail.quarantinedAt = record.quarantinedAt;
-      }
-    }
-    res.json(detail);
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.get("/api/skills/:id/file", (req, res) => {
-  try {
-    const rel = String(req.query.path || "");
-    if (!rel) {
-      res.status(400).json({ error: "Missing path" });
-      return;
-    }
-    const index = getIndex();
-    const summary = index.byId.get(req.params.id);
-    if (!summary) {
-      res.status(404).json({ error: "Skill not in the cabinet" });
-      return;
-    }
-    res.json(readSkillFile(summary, rel));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-function idsFrom(body) {
-  return Array.isArray(body?.ids) ? body.ids.map(String) : [];
-}
-
-function runOnIds(ids, act, key) {
-  const index = getIndex(true);
-  const done = [];
-  const errors = [];
-  for (const id of ids) {
-    const summary = index.byId.get(id);
-    if (!summary) {
-      errors.push({ id, error: "Skill not in the cabinet" });
-      continue;
-    }
-    try {
-      const result = act(summary, index.roots);
-      done.push({ id, name: summary.name, ...result });
-    } catch (err) {
-      errors.push({ id, error: err.message, path: summary.path });
-    }
-  }
-  cache = { at: 0, payload: null };
-  return { [key]: done, errors };
-}
-
-function deleteIds(ids) {
-  const index = getIndex(true);
-  const deleted = [];
-  const errors = [];
-  for (const id of ids) {
-    const summary = index.byId.get(id);
-    if (!summary) {
-      errors.push({ id, error: "Skill not in the cabinet" });
-      continue;
-    }
-    try {
-      const target = assertDeletable(summary, index.roots);
-      deleteSkillDir(target);
-      forgetQuarantinePath(target);
-      deleted.push({ id, path: target, name: summary.name });
-    } catch (err) {
-      errors.push({ id, error: err.message, path: summary.path });
-    }
-  }
-  cache = { at: 0, payload: null };
-  return { deleted, errors };
-}
-
-app.post("/api/skills/delete", requireLoopbackOrigin, (req, res) => {
-  try {
-    const ids = idsFrom(req.body);
-    if (!ids.length) {
-      res.status(400).json({ error: "No cards selected" });
-      return;
-    }
-    res.json(deleteIds(ids));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post("/api/skills/quarantine", requireLoopbackOrigin, (req, res) => {
-  try {
-    const ids = idsFrom(req.body);
-    if (!ids.length) {
-      res.status(400).json({ error: "No cards selected" });
-      return;
-    }
-    res.json(runOnIds(ids, quarantineSkill, "quarantined"));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post("/api/skills/restore", requireLoopbackOrigin, (req, res) => {
-  try {
-    const ids = idsFrom(req.body);
-    if (!ids.length) {
-      res.status(400).json({ error: "No cards selected" });
-      return;
-    }
-    res.json(runOnIds(ids, restoreSkill, "restored"));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-if (isProd) {
-  const dist = path.join(ROOT, "dist");
-  if (!fs.existsSync(path.join(dist, "index.html"))) {
-    console.error("skill-cabinet: missing dist/. Run `npm run build` first.");
-    process.exit(1);
-  }
-  app.use(express.static(dist));
-  app.use((req, res) => {
-    if (req.path.startsWith("/api")) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    res.sendFile(path.join(dist, "index.html"));
+  const app = createApp({ ...runtime, distRoot });
+  const server = app.listen(port, "127.0.0.1", () => {
+    const address = server.address();
+    const url = `http://127.0.0.1:${address.port}`;
+    process.stdout.write(`Skill Cabinet read-only dashboard at ${url}\n`);
+    if (production) openBrowser(url);
   });
+  return { server, ...runtime };
 }
 
-function start(port = PREFERRED_PORT, attemptsLeft = 20) {
-  const server = app.listen(port, "127.0.0.1");
-  server.on("listening", () => {
-    const { port: bound } = server.address();
-    const url = `http://127.0.0.1:${bound}`;
-    if (isProd) {
-      console.log(`Skill Cabinet at ${url}`);
-      openBrowser(url);
-    } else {
-      console.log(`Skill cabinet api on ${url}`);
-    }
-  });
-  server.on("error", (err) => {
-    if (err.code === "EADDRINUSE" && !process.env.PORT && attemptsLeft > 0) {
-      start(port + 1, attemptsLeft - 1);
-      return;
-    }
-    console.error(`Could not bind 127.0.0.1:${port}: ${err.message}`);
-    process.exit(1);
-  });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer();
 }
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  start(PREFERRED_PORT);
-}
-
-export { app, start };

@@ -1,55 +1,29 @@
 const headers = { Accept: "application/json" };
 
-async function json(resPromise) {
-  const res = await resPromise;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || res.statusText);
-  }
+async function json(url) {
+  const response = await fetch(url, { headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
 }
 
-export function fetchCatalog(refresh = false) {
-  return json(
-    fetch(`/api/skills${refresh ? "?refresh=1" : ""}`, { headers }),
-  );
+export function fetchCatalog() {
+  return json("/api/catalog");
+}
+
+export function fetchUsage() {
+  return json("/api/usage");
+}
+
+export function fetchHealth() {
+  return json("/api/health");
 }
 
 export function fetchSkill(id) {
-  return json(fetch(`/api/skills/${id}`, { headers }));
+  return json(`/api/skills/${encodeURIComponent(id)}`);
 }
 
-export function fetchSkillFile(id, relPath) {
-  const q = new URLSearchParams({ path: relPath });
-  return json(fetch(`/api/skills/${id}/file?${q}`, { headers }));
-}
-
-export function deleteSkills(ids) {
-  return json(
-    fetch("/api/skills/delete", {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    }),
-  );
-}
-
-export function quarantineSkills(ids) {
-  return json(
-    fetch("/api/skills/quarantine", {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    }),
-  );
-}
-
-export function restoreSkills(ids) {
-  return json(
-    fetch("/api/skills/restore", {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    }),
-  );
+export function fetchSkillFile(id, relativePath) {
+  const query = new URLSearchParams({ path: relativePath });
+  return json(`/api/skills/${encodeURIComponent(id)}/file?${query}`);
 }
