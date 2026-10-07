@@ -16,20 +16,21 @@ On the VPS, confirm that the selected ports and service name are free:
 ss -lnt | grep -E ':(8050|8446)\b' && exit 1 || true
 systemctl status skill-cabinet.service --no-pager || true
 tailscale status
-tailscale serve status --json
+sudo tailscale serve status --json
 node --version
 df -h / /srv
 free -h
 ```
 
-Node must be version 22.13 or newer. Save the current Tailscale Serve state before
-the change:
+Node must be version 22.13 or newer. Record the current Tailscale Serve state in
+the deployment issue before the change:
 
 ```bash
+set -euo pipefail
 sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
   skill-cabinet 2>/dev/null || true
 sudo install -d -m 0750 -o root -g skill-cabinet /var/lib/skill-cabinet
-sudo tailscale serve get-config --all /var/lib/skill-cabinet/tailscale-serve-before.json
+sudo tailscale serve status --json | jq -e 'type == "object"'
 ```
 
 ## Install the release
@@ -106,7 +107,7 @@ curl -fsS -H 'Host: racketdata-files-vps.tail12e6bc.ts.net' \
   http://127.0.0.1:8050/api/health | jq -e \
   '.ok == true and .mode == "read-only" and (.snapshot_sources | length) >= 1'
 sudo tailscale serve --bg --https=8446 http://127.0.0.1:8050
-tailscale serve status --json
+sudo tailscale serve status --json
 ```
 
 From a Tailnet client, open the private URL and check the catalog, a skill
@@ -124,12 +125,13 @@ configuration has no Skill Cabinet route.
 
 ## Rollback
 
-Restore the prior Tailscale Serve state and stop the new service:
+Remove only the Skill Cabinet route and stop the new service. Compare the new
+status with the state recorded in the deployment issue:
 
 ```bash
-sudo tailscale serve set-config --all \
-  /var/lib/skill-cabinet/tailscale-serve-before.json
+sudo tailscale serve --https=8446 off
 sudo systemctl disable --now skill-cabinet.service
+sudo tailscale serve status --json
 ```
 
 If this release replaced an older release, repoint `/srv/skill-cabinet/current`
