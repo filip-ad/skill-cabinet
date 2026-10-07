@@ -29,7 +29,7 @@ the change:
 sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin \
   skill-cabinet 2>/dev/null || true
 sudo install -d -m 0750 -o root -g skill-cabinet /var/lib/skill-cabinet
-sudo tailscale serve get-config /var/lib/skill-cabinet/tailscale-serve-before.json --all
+sudo tailscale serve get-config --all /var/lib/skill-cabinet/tailscale-serve-before.json
 ```
 
 ## Install the release
@@ -127,8 +127,8 @@ configuration has no Skill Cabinet route.
 Restore the prior Tailscale Serve state and stop the new service:
 
 ```bash
-sudo tailscale serve set-config \
-  /var/lib/skill-cabinet/tailscale-serve-before.json --all
+sudo tailscale serve set-config --all \
+  /var/lib/skill-cabinet/tailscale-serve-before.json
 sudo systemctl disable --now skill-cabinet.service
 ```
 
