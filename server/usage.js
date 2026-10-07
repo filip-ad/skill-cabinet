@@ -18,6 +18,7 @@ const EVENT_FIELDS = new Set([
   "parser_version",
   "occurrence_evidence",
 ]);
+const COUNTED_PROVIDER_ADAPTERS = "adapter IN ('claude', 'kimi', 'codex')";
 
 function digest(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -360,12 +361,13 @@ export class UsageStore {
         COUNT(DISTINCT session_hash) AS unique_sessions,
         MAX(occurred_at) AS last_use,
         SUM(occurrence_evidence='exact' AND identity_resolution!='resolved') AS unassigned_exact
-      FROM events
+      FROM events WHERE ${COUNTED_PROVIDER_ADAPTERS}
     `).get();
     const group = (field, where = "1=1") => this.db.prepare(`
       SELECT ${field} AS key, COUNT(*) AS invocations,
         COUNT(DISTINCT session_hash) AS unique_sessions, MAX(occurred_at) AS last_use
-      FROM events WHERE ${where} AND ${field} IS NOT NULL AND ${field} != ''
+      FROM events WHERE ${COUNTED_PROVIDER_ADAPTERS} AND ${where}
+        AND ${field} IS NOT NULL AND ${field} != ''
       GROUP BY ${field} ORDER BY invocations DESC, key
     `).all();
     const bySkill = this.db.prepare(`
@@ -373,7 +375,8 @@ export class UsageStore {
         COUNT(DISTINCT session_hash) AS unique_sessions, MAX(occurred_at) AS last_use,
         GROUP_CONCAT(DISTINCT occurrence_evidence) AS occurrence_evidence,
         'resolved' AS identity_resolution
-      FROM events WHERE identity_resolution='resolved' AND installation_id IS NOT NULL
+      FROM events WHERE ${COUNTED_PROVIDER_ADAPTERS}
+        AND identity_resolution='resolved' AND installation_id IS NOT NULL
       GROUP BY installation_id ORDER BY invocations DESC, key
     `).all();
     return {
@@ -394,13 +397,15 @@ export class UsageStore {
       SELECT COUNT(*) AS invocations,
         COUNT(DISTINCT session_hash) AS unique_sessions,
         MAX(occurred_at) AS last_use
-      FROM events WHERE installation_id = ? AND identity_resolution='resolved'
+      FROM events WHERE ${COUNTED_PROVIDER_ADAPTERS}
+        AND installation_id = ? AND identity_resolution='resolved'
     `).get(installationId);
     const split = (field) => this.db.prepare(`
       SELECT ${field} AS key, COUNT(*) AS invocations,
         COUNT(DISTINCT session_hash) AS unique_sessions, MAX(occurred_at) AS last_use
       FROM events
-      WHERE installation_id = ? AND identity_resolution='resolved'
+      WHERE ${COUNTED_PROVIDER_ADAPTERS}
+        AND installation_id = ? AND identity_resolution='resolved'
         AND ${field} IS NOT NULL AND ${field} != ''
       GROUP BY ${field} ORDER BY invocations DESC, key
     `).all(installationId);

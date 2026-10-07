@@ -115,7 +115,7 @@ test("a repository-local call stays unresolved until repository context is obser
     skill_path: undefined,
     skill_name: "sample",
     repository: undefined,
-  })], "fixture");
+  })], "claude");
   assert.equal(store.forInstallation("repo").invocations, 0);
   assert.equal(store.aggregates().by_identity_resolution[0].key, "unresolved");
 
@@ -148,13 +148,26 @@ test("imports independently, deduplicates, and keeps unassigned exact calls in C
     event(),
     event({ source_id: "two", skill_path: undefined, skill_name: "unknown" }),
     event({ source_id: "bad", prompt: "private" }),
-  ], "fixture");
+  ], "claude");
   assert.deepEqual({ imported: result.imported, duplicates: result.duplicates, errors: result.errors.length }, { imported: 2, duplicates: 1, errors: 1 });
   const totals = store.aggregates();
   assert.equal(totals.summary.invocations, 2);
   assert.equal(totals.summary.unassigned_exact, 1);
   assert.equal(totals.by_cli[0].invocations, 2);
   assert.equal(totals.by_skill[0].invocations, 1);
+  store.close();
+  fs.rmSync(root, { recursive: true });
+});
+
+test("v1 totals exclude recorder rows already present in the usage database", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-provider-only-"));
+  const store = new UsageStore({ dbPath: path.join(root, "usage.sqlite"), inventory });
+  store.importEvents([event({ source_id: "provider" })], "claude");
+  store.importEvents([event({ source_id: "recorder" })], "recorder");
+
+  assert.equal(store.aggregates().summary.invocations, 1);
+  assert.equal(store.aggregates().by_cli[0].invocations, 1);
+  assert.equal(store.forInstallation("global").invocations, 1);
   store.close();
   fs.rmSync(root, { recursive: true });
 });

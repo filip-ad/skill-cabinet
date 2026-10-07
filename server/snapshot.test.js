@@ -27,6 +27,7 @@ function fixture({
   generatedAt = "2026-09-07T12:00:00Z",
   currencyCheckedAt = "2026-09-07T11:00:00Z",
   withUsage = true,
+  withRecorder = false,
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-snapshot-"));
   const skillRoot = path.join(root, "sample");
@@ -88,7 +89,17 @@ function fixture({
       session_id: "private-session",
       skill_path: installation.location,
       occurrence_evidence: "exact",
-    }], "fixture");
+    }], "codex");
+  }
+  if (withRecorder) {
+    usageStore.importEvents([{
+      source_id: "recorder-event",
+      occurred_at: "2026-09-07T10:00:00Z",
+      cli: "codex",
+      session_id: "private-session",
+      skill_path: installation.location,
+      occurrence_evidence: "exact",
+    }], "recorder");
   }
   const snapshot = createSnapshot({ sourceId, catalog, usageStore, generatedAt });
   usageStore.close();
@@ -115,6 +126,14 @@ test("creates a valid zero-usage snapshot", () => {
     last_use: null,
     unassigned_exact: 0,
   });
+  fs.rmSync(value.root, { recursive: true });
+});
+
+test("snapshot excludes recorder rows from an existing mixed usage database", () => {
+  const value = fixture({ withRecorder: true });
+  assert.equal(value.snapshot.usage.summary.invocations, 1);
+  assert.equal(value.snapshot.usage.by_cli[0].invocations, 1);
+  assert.equal(value.snapshot.usage.installation_usage[0].invocations, 1);
   fs.rmSync(value.root, { recursive: true });
 });
 
