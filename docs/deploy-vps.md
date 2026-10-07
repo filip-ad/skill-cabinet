@@ -2,7 +2,7 @@
 
 This runbook deploys Skill Cabinet to the HostUp VPS. The service listens on
 `127.0.0.1:8050`. Tailscale Serve exposes it only on
-`https://racketdata-files-vps.tail12e6bc.ts.net:8445/`.
+`https://racketdata-files-vps.tail12e6bc.ts.net:8446/`.
 
 The VPS workflow marks deployment as manual. Run these commands only after the
 exact release commit has passed proof, Auto Review, integration, push, and the
@@ -13,7 +13,7 @@ operator UI approval gate.
 On the VPS, confirm that the selected ports and service name are free:
 
 ```bash
-ss -lnt | grep -E ':(8050|8445)\b' && exit 1 || true
+ss -lnt | grep -E ':(8050|8446)\b' && exit 1 || true
 systemctl status skill-cabinet.service --no-pager || true
 tailscale status
 tailscale serve status --json
@@ -105,7 +105,7 @@ sudo systemctl enable --now skill-cabinet.service
 curl -fsS -H 'Host: racketdata-files-vps.tail12e6bc.ts.net' \
   http://127.0.0.1:8050/api/health | jq -e \
   '.ok == true and .mode == "read-only" and (.snapshot_sources | length) >= 1'
-sudo tailscale serve --bg --https=8445 http://127.0.0.1:8050
+sudo tailscale serve --bg --https=8446 http://127.0.0.1:8050
 tailscale serve status --json
 ```
 
