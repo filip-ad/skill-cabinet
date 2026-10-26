@@ -419,6 +419,30 @@ export class UsageStore {
   }
 }
 
+export function preserveAcceptedCodexGap(dbPath, { seed } = {}) {
+  const db = new DatabaseSync(dbPath);
+  const key = "accepted-gap:codex-nul:2026-10-07";
+  if (seed !== undefined) {
+    db.prepare("INSERT INTO metadata(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
+      .run(key, seed ? "2" : "0");
+  }
+  const accepted = db.prepare("SELECT value FROM metadata WHERE key = ?").get(key);
+  if (!accepted) {
+    db.close();
+    return "missing";
+  }
+  if (accepted.value === "2") {
+    const result = db.prepare("UPDATE adapter_health SET errors = 2, message = ? WHERE adapter = 'codex'")
+      .run("accepted data gap: two irrecoverable NUL-only records (2026-10-07)");
+    if (result.changes !== 1) {
+      db.close();
+      throw new Error("Codex adapter health is missing");
+    }
+  }
+  db.close();
+  return accepted.value === "2" ? "gap" : "clean";
+}
+
 export function defaultUsagePath() {
   return process.env.SKILL_USAGE_DB || path.join(os.homedir(), ".local", "share", "skill-cabinet", "usage.sqlite");
 }

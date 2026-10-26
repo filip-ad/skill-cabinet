@@ -10,6 +10,7 @@ import {
   parseClaudeRecords,
   parseCodexRecords,
   parseKimiRecords,
+  preserveAcceptedCodexGap,
   UsageStore,
 } from "./usage.js";
 
@@ -190,6 +191,28 @@ test("keeps the usage directory and database private", () => {
   const store = new UsageStore({ dbPath, inventory });
   assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
   assert.equal(fs.statSync(dbPath).mode & 0o777, 0o600);
+  store.close();
+  fs.rmSync(root, { recursive: true });
+});
+
+test("preserves the accepted Codex gap only after a verified seed", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-gap-"));
+  const dbPath = path.join(root, "usage.sqlite");
+  let store = new UsageStore({ dbPath, inventory });
+  store.importEvents([event({ cli: "codex" })], "codex");
+  store.close();
+
+  assert.equal(preserveAcceptedCodexGap(dbPath), "missing");
+  assert.equal(preserveAcceptedCodexGap(dbPath, { seed: true }), "gap");
+  store = new UsageStore({ dbPath, inventory });
+  assert.equal(store.aggregates().adapter_health.find((row) => row.adapter === "codex").errors, 2);
+  store.importEvents([], "codex");
+  assert.equal(store.aggregates().adapter_health.find((row) => row.adapter === "codex").errors, 0);
+  store.close();
+
+  assert.equal(preserveAcceptedCodexGap(dbPath), "gap");
+  store = new UsageStore({ dbPath, inventory });
+  assert.equal(store.aggregates().adapter_health.find((row) => row.adapter === "codex").errors, 2);
   store.close();
   fs.rmSync(root, { recursive: true });
 });

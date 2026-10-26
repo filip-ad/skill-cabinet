@@ -30,8 +30,24 @@ exit 0
 printf 'node %s\\n' "$*" >> "$PUBLISH_TEST_LOG"
 if test "$1" = --input-type=module; then
   cat >/dev/null
-  test "\${PUBLISH_TEST_GAP_VERIFY_FAIL:-0}" != 1
-  exit $?
+  if test "$#" = 3; then
+    test "\${PUBLISH_TEST_GAP_VERIFY_FAIL:-0}" != 1
+    exit $?
+  fi
+  db=$4
+  mode=$5
+  case "$mode" in
+    seed-gap) printf '\naccepted-gap=2\ncodex-errors=2\n' >> "$db" ;;
+    seed-clean) printf '\naccepted-gap=0\n' >> "$db" ;;
+    preserve)
+      if grep -q '^accepted-gap=2$' "$db"; then
+        printf 'codex-errors=2\n' >> "$db"
+      elif ! grep -q '^accepted-gap=0$' "$db"; then
+        exit 2
+      fi
+      ;;
+  esac
+  exit 0
 fi
 mode=
 db=
@@ -53,7 +69,7 @@ while test "$#" -gt 0; do
 done
 if test "$mode" = history; then
   test "\${PUBLISH_TEST_HISTORY_FAIL:-0}" != 1 || exit 1
-  if test ! -e "$PUBLISH_TEST_LOG.bootstrap"; then
+  if test "\${PUBLISH_TEST_SKIP_INITIAL_GAP:-0}" != 1 && test ! -e "$PUBLISH_TEST_LOG.bootstrap"; then
     printf '%s\\n' \
       'claude: 4 added, 0 duplicates, 0 errors' \
       'kimi: 3 added, 0 duplicates, 0 errors' \
@@ -127,6 +143,7 @@ test("daily timer uses the small persistent user-service design", () => {
   assert.match(script, /flock -n 9/);
   assert.match(script, /skill_registry\.py" check/);
   assert.match(script, /usage\.sqlite/);
+  assert.match(script, /preserveAcceptedCodexGap/);
   assert.match(script, /skill-snapshot\.js" validate/);
   assert.match(script, /systemctl restart skill-cabinet\.service/);
   assert.doesNotMatch(script, /curl[^\n]+https:\/\//);
@@ -147,6 +164,7 @@ test("publisher validates and installs one filtered snapshot", () => {
     assert.match(commands, /ssh vps-pd [\s\S]*skill-snapshot\.js install/);
     assert.match(commands, /ssh vps-pd [\s\S]*systemctl restart skill-cabinet\.service/);
     assert.ok(fs.existsSync(path.join(value.state, "usage.sqlite")));
+    assert.match(fs.readFileSync(path.join(value.state, "usage.sqlite"), "utf8"), /accepted-gap=2/);
     assert.equal(fs.statSync(value.state).mode & 0o777, 0o700);
   } finally {
     fs.rmSync(value.temporary, { recursive: true, force: true });
@@ -192,6 +210,21 @@ test("a failed later import does not change the live usage database", () => {
     assert.equal(fs.existsSync(path.join(value.state, "usage.next.sqlite")), false);
     const commands = fs.readFileSync(value.log, "utf8");
     assert.doesNotMatch(commands, /^scp /m);
+  } finally {
+    fs.rmSync(value.temporary, { recursive: true, force: true });
+  }
+});
+
+test("a later clean import migrates and preserves the accepted gap", () => {
+  const value = fixture();
+  try {
+    fs.mkdirSync(value.state);
+    const database = path.join(value.state, "usage.sqlite");
+    fs.writeFileSync(database, "existing database\n");
+    const result = runPublisher(value, { PUBLISH_TEST_SKIP_INITIAL_GAP: "1" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(fs.readFileSync(database, "utf8"), /accepted-gap=2/);
+    assert.match(fs.readFileSync(database, "utf8"), /codex-errors=2/);
   } finally {
     fs.rmSync(value.temporary, { recursive: true, force: true });
   }

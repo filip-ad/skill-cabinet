@@ -123,10 +123,12 @@ The first devbox run creates the persistent database at
 `~/.local/state/skill-cabinet/usage.sqlite`. It accepts only the two exact
 NUL-only Codex records covered by the recorded 2026-10-07 decision. The script
 checks each file, line, byte count, and SHA-256 digest. It imports a second time
-with no exception before it installs the database. All later runs fail closed
-on any provider import error. Each later import uses a disposable database copy
-and replaces the live database only after success. Raw provider logs stay on
-the devbox. Only the validated snapshot is transferred.
+with no exception before it installs the database. A marker in that database
+keeps the two accepted historical errors visible in each later snapshot. All
+later runs fail closed on any new provider import error. Each later import uses
+a disposable database copy and replaces the live database only after success.
+Raw provider logs stay on the devbox. Only the validated snapshot is
+transferred.
 
 To stop automatic publication without changing the live dashboard:
 

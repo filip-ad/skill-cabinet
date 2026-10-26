@@ -70,6 +70,17 @@ import_history() {
   node "$REPOSITORY_ROOT/bin/skill-usage.js" history --db "$1" --registry "$REGISTRY_ROOT"
 }
 
+preserve_accepted_gap() {
+  node --input-type=module - "$REPOSITORY_ROOT/server/usage.js" "$1" "$2" <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const { preserveAcceptedCodexGap } = await import(pathToFileURL(process.argv[2]));
+const mode = process.argv[4];
+const options = mode === "seed-gap" ? { seed: true } : mode === "seed-clean" ? { seed: false } : {};
+if (preserveAcceptedCodexGap(process.argv[3], options) === "missing") process.exit(2);
+NODE
+}
+
 python3 "$REGISTRY_ROOT/scripts/skill_registry.py" check
 for file in "$NEXT_DATABASE" "$NEXT_DATABASE-wal" "$NEXT_DATABASE-shm"; do
   test ! -e "$file" || unlink "$file"
@@ -81,6 +92,7 @@ if test ! -e "$USAGE_DATABASE"; then
   set -e
   printf '%s\n' "$INITIAL_IMPORT"
   if test "$INITIAL_STATUS" -eq 0; then
+    preserve_accepted_gap "$NEXT_DATABASE" seed-clean
     mv "$NEXT_DATABASE" "$USAGE_DATABASE"
   elif test "$INITIAL_STATUS" -ne 1 \
     || ! grep -Eq '^claude: [0-9]+ added, [0-9]+ duplicates, 0 errors$' <<<"$INITIAL_IMPORT" \
@@ -94,11 +106,24 @@ if test ! -e "$USAGE_DATABASE"; then
     exit 1
   else
     import_history "$NEXT_DATABASE"
+    preserve_accepted_gap "$NEXT_DATABASE" seed-gap
     mv "$NEXT_DATABASE" "$USAGE_DATABASE"
   fi
 else
   cp --reflink=auto --preserve=mode "$USAGE_DATABASE" "$NEXT_DATABASE"
   import_history "$NEXT_DATABASE"
+  set +e
+  preserve_accepted_gap "$NEXT_DATABASE" preserve
+  GAP_STATUS=$?
+  set -e
+  case "$GAP_STATUS" in
+    0) ;;
+    2)
+      verify_known_initial_gap
+      preserve_accepted_gap "$NEXT_DATABASE" seed-gap
+      ;;
+    *) exit "$GAP_STATUS" ;;
+  esac
   mv "$NEXT_DATABASE" "$USAGE_DATABASE"
 fi
 node "$REPOSITORY_ROOT/bin/skill-snapshot.js" generate \
