@@ -426,6 +426,7 @@ export function defaultUsagePath() {
 export function parseClaudeRecords(records) {
   const events = [];
   for (const record of records) {
+    if (record?.type !== "assistant") continue;
     const content = record?.message?.content || record?.content || [];
     for (const item of Array.isArray(content) ? content : []) {
       if (item?.type !== "tool_use" || item?.name !== "Skill") continue;

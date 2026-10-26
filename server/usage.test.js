@@ -195,13 +195,15 @@ test("keeps the usage directory and database private", () => {
 });
 
 test("provider adapters classify supported history without reading private content", () => {
-  const claude = parseClaudeRecords([{ timestamp: "2026-09-07T12:00:00Z", sessionId: "s", cwd: "/repo", message: { content: [{ type: "tool_use", name: "Skill", id: "c1", input: { skill: "sample", prompt: "not copied" } }] } }]);
+  const claudeRecord = { timestamp: "2026-09-07T12:00:00Z", sessionId: "s", cwd: "/repo", message: { content: [{ type: "tool_use", name: "Skill", id: "c1", input: { skill: "sample", prompt: "not copied" } }] } };
+  const claude = parseClaudeRecords([{ type: "assistant", ...claudeRecord }]);
   const kimi = parseKimiRecords([{ type: "context.append_loop_event", time: "2026-09-07T12:00:00Z", event: { type: "tool.call", name: "Skill", toolCallId: "k1", args: { skill: "sample", raw_command: "not copied" } } }], { filePath: "/history/kimi.jsonl" });
   const codex = parseCodexRecords([
     { type: "session_meta", payload: { cwd: "/repo" } },
     { type: "event_msg", timestamp: "2026-09-07T12:00:00Z", payload: { type: "agent_message", message: "I am using the sample skill because it matches." } },
   ], { filePath: "/history/codex.jsonl" });
   assert.equal(claude[0].occurrence_evidence, "exact");
+  assert.equal(parseClaudeRecords([{ type: "api-request-blob", ...claudeRecord }]).length, 0);
   assert.equal(kimi[0].occurrence_evidence, "exact");
   assert.equal(codex[0].occurrence_evidence, "inferred");
   assert.equal(kimi[0].session_id, "/history/kimi.jsonl");
@@ -236,7 +238,7 @@ test("discovers only supported history files", () => {
 test("JSONL import cursors read only complete new records", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-cursor-"));
   const file = path.join(root, "claude.jsonl");
-  const makeRecord = (id) => JSON.stringify({ timestamp: "2026-09-07T12:00:00Z", sessionId: "s", cwd: "/repo", message: { content: [{ type: "tool_use", name: "Skill", id, input: { skill: "sample" } }] } });
+  const makeRecord = (id) => JSON.stringify({ type: "assistant", timestamp: "2026-09-07T12:00:00Z", sessionId: "s", cwd: "/repo", message: { content: [{ type: "tool_use", name: "Skill", id, input: { skill: "sample" } }] } });
   fs.writeFileSync(file, `${makeRecord("one")}\n`);
   const store = new UsageStore({ dbPath: path.join(root, "usage.sqlite"), inventory });
   assert.equal(store.importJsonlFile(file, "claude", parseClaudeRecords).imported, 1);
