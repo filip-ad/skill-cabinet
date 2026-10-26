@@ -101,7 +101,8 @@ ssh vps-pd 'sudo systemctl restart skill-cabinet.service && \
 The devbox uses one systemd user timer. It publishes once each day at 03:15
 local time. `Persistent=true` runs a missed publish after the user manager starts
 again. The publisher keeps one private incremental usage database, refuses
-overlapping runs, and stops before transfer when any check fails.
+overlapping runs, and stops before transfer when any check fails. The user
+service runs through the installed NVM Node 22 runtime.
 
 Install the tracked user units from the integrated checkout:
 

@@ -120,7 +120,8 @@ test("daily timer uses the small persistent user-service design", () => {
 
   assert.match(service, /^Type=oneshot$/m);
   assert.match(service, /^WorkingDirectory=%h\/dev\/skill-cabinet$/m);
-  assert.match(service, /^ExecStart=%h\/dev\/skill-cabinet\/scripts\/publish-devbox-snapshot\.sh$/m);
+  assert.match(service, /^Environment=NODE_VERSION=22$/m);
+  assert.match(service, /^ExecStart=%h\/\.nvm\/nvm-exec %h\/dev\/skill-cabinet\/scripts\/publish-devbox-snapshot\.sh$/m);
   assert.match(timer, /^OnCalendar=\*-\*-\* 03:15:00$/m);
   assert.match(timer, /^Persistent=true$/m);
   assert.match(script, /flock -n 9/);
