@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish the governed devbox Skill Cabinet snapshot daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+Unit=skill-cabinet-publish.service
+
+[Install]
+WantedBy=timers.target

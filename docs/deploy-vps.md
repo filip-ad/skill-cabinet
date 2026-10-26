@@ -96,6 +96,43 @@ ssh vps-pd 'sudo systemctl restart skill-cabinet.service && \
   http://127.0.0.1:8050/api/health | jq -e ".ok == true"'
 ```
 
+## Automate the devbox publish
+
+The devbox uses one systemd user timer. It publishes once each day at 03:15
+local time. `Persistent=true` runs a missed publish after the user manager starts
+again. The publisher keeps one private incremental usage database, refuses
+overlapping runs, and stops before transfer when any check fails.
+
+Install the tracked user units from the integrated checkout:
+
+```bash
+install -D -m 0644 deploy/skill-cabinet-publish.service \
+  "$HOME/.config/systemd/user/skill-cabinet-publish.service"
+install -D -m 0644 deploy/skill-cabinet-publish.timer \
+  "$HOME/.config/systemd/user/skill-cabinet-publish.timer"
+systemctl --user daemon-reload
+systemctl --user enable --now skill-cabinet-publish.timer
+systemctl --user start skill-cabinet-publish.service
+systemctl --user show skill-cabinet-publish.service \
+  -p Result -p ExecMainStatus --no-pager
+systemctl --user list-timers skill-cabinet-publish.timer --no-pager
+```
+
+The first devbox run creates the persistent database at
+`~/.local/state/skill-cabinet/usage.sqlite`. It accepts only the two exact
+NUL-only Codex records covered by the recorded 2026-10-07 decision. The script
+checks each file, line, byte count, and SHA-256 digest. It imports a second time
+with no exception before it installs the database. All later runs fail closed
+on any provider import error. Each later import uses a disposable database copy
+and replaces the live database only after success. Raw provider logs stay on
+the devbox. Only the validated snapshot is transferred.
+
+To stop automatic publication without changing the live dashboard:
+
+```bash
+systemctl --user disable --now skill-cabinet-publish.timer
+```
+
 ## Start and expose the service
 
 Run this part on the VPS:

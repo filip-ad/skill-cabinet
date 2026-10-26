@@ -248,6 +248,19 @@ test("JSONL import cursors read only complete new records", () => {
   fs.rmSync(root, { recursive: true });
 });
 
+test("incremental JSONL import errors identify the source file and exact line", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-errors-"));
+  const file = path.join(root, "codex.jsonl");
+  fs.writeFileSync(file, '{}\n');
+  const store = new UsageStore({ dbPath: path.join(root, "usage.sqlite"), inventory });
+  assert.deepEqual(store.importJsonlFile(file, "codex", parseCodexRecords).errors, []);
+  fs.appendFileSync(file, '\nnot-json\n{}\n');
+  const result = store.importJsonlFile(file, "codex", parseCodexRecords);
+  assert.deepEqual(result.errors, [`Malformed JSONL record ${file}:3`]);
+  store.close();
+  fs.rmSync(root, { recursive: true });
+});
+
 test("Codex incremental imports retain session repository context", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "skill-codex-cursor-"));
   const file = path.join(root, "codex.jsonl");

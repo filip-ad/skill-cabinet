@@ -58,6 +58,7 @@ try {
       const result = store.importHistoryFiles(history[adapter], adapter, parser);
       errorCount += result.errors.length;
       process.stdout.write(`${adapter}: ${result.imported} added, ${result.duplicates} duplicates, ${result.errors.length} errors\n`);
+      for (const error of result.errors) process.stderr.write(`${adapter}: ${error}\n`);
     }
     const reindexed = store.reindex();
     process.stdout.write(`identity: ${reindexed.checked} observations checked\n`);

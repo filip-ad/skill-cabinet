@@ -276,17 +276,19 @@ export class UsageStore {
     const file = fs.readFileSync(filePath);
     let offset = Number(row?.value || 0);
     if (offset > file.length) offset = 0;
+    const precedingLines = file.subarray(0, offset).reduce((count, byte) => count + (byte === 10 ? 1 : 0), 0);
     const remaining = file.subarray(offset);
     const lastNewline = remaining.lastIndexOf(10);
     if (lastNewline < 0) return { imported: 0, duplicates: 0, errors: [] };
     const complete = remaining.subarray(0, lastNewline + 1).toString("utf8");
     const records = [];
     const parseErrors = [];
-    for (const [index, line] of complete.split(/\r?\n/).filter(Boolean).entries()) {
+    for (const [index, line] of complete.split(/\r?\n/).entries()) {
+      if (!line) continue;
       try {
         records.push(JSON.parse(line));
       } catch {
-        parseErrors.push(`Malformed JSONL record ${index + 1}`);
+        parseErrors.push(`Malformed JSONL record ${friendlyPath(filePath)}:${precedingLines + index + 1}`);
       }
     }
     const currentMetadata = records.find((record) => record?.type === "session_meta")?.payload;
